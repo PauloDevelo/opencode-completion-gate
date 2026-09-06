@@ -1,0 +1,1 @@
+From project root on Windows PowerShell: `npm test`; focused test `npx vitest run tests/<name>.test.ts`; `npm run lint`; `npm run format:check`; `npm run build`; `git diff --check`; `git status --short --branch`. For skill validation, inspect SKILL.md and parse frontmatter with a small Node script if needed.
