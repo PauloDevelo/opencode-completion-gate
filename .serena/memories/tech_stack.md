@@ -1,0 +1,1 @@
+ESM Node >=18 TypeScript project. npm package with esbuild bundles, TypeScript declaration build, Vitest tests, ESLint 9, Prettier 3. package-lock.json is committed. Main scripts are in `package.json`.

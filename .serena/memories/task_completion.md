@@ -1,0 +1,1 @@
+For source changes run `npm run lint`, `npm run build`, and `npm test`; use `npm run format:check` when formatting-sensitive files change. For a Markdown skill-only change, verify frontmatter/name-directory consistency, scan for machine-specific paths and forbidden gate-config edits, then run `git diff --check` and inspect `git status`/`git diff`.
