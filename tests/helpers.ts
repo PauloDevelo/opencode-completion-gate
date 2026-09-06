@@ -6,6 +6,7 @@ import { join, dirname } from 'path';
  *  Writes each entry (relative path -> content), plus a `.git` FILE so
  *  findGateConfigPath stops walking up here. */
 export function makeTempProject(files: Record<string, string>): string {
+  mkdirSync(join(tmpdir(), 'opencode'), { recursive: true });
   const root = mkdtempSync(join(tmpdir(), 'opencode', 'completion-gate-test-'));
   for (const [rel, content] of Object.entries(files)) {
     const p = join(root, rel);
