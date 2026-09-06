@@ -1,80 +1,64 @@
 import type { Hooks, Plugin, PluginInput } from '@opencode-ai/plugin';
-import { readFileSync, appendFileSync, existsSync, mkdirSync, mkdtempSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, mkdtempSync } from 'fs';
 import { join, dirname } from 'path';
-import { homedir, tmpdir } from 'os';
-import { exec, execFile } from 'child_process';
-import type { SpawnOptions } from 'child_process';
+import { tmpdir } from 'os';
+import {
+  brief,
+  buildShellInvocation,
+  describeSdkError,
+  execFileOut,
+  execShell,
+  logDiag,
+  quoteWin,
+  runCommand,
+  truncateTail,
+} from './process.js';
+import type {
+  AdoPrAssertion,
+  AdoPrPollOptions,
+  AssertionOutcome,
+  BuildLogArtifact,
+  BuildLogArtifactRunner,
+  BuildLogDownloadOptions,
+  BuildLogExtractor,
+  CommandAssertion,
+  GateAssertion,
+  GateConfig,
+  PolicyEvaluationMinimal,
+  ReviewAssertion,
+  ReviewSessionClient,
+  ShellFn,
+  ShellInvocation,
+  TerminalBuildFailure,
+} from './types.js';
 
-const BASE_DIR = join(homedir(), '.config', 'opencode');
-
-function logDiag(msg: string): void {
-  try {
-    appendFileSync(join(BASE_DIR, 'gate-diag.log'), `${new Date().toISOString()} ${msg}\n`);
-  } catch {
-    // best-effort diagnostics — ignore write failures
-  }
-}
-
-/** First non-empty line of a multi-line text, capped — for compact log lines. */
-function brief(s: string): string {
-  const line =
-    s
-      .replace(/\r\n/g, '\n')
-      .split('\n')
-      .find((l) => l.trim() !== '') ?? '';
-  return line.length > 160 ? `${line.slice(0, 157)}...` : line;
-}
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface CommandAssertion {
-  type: 'command';
-  name: string;
-  run: string;
-  timeoutSeconds: number;
-}
-
-export interface AdoPrAssertion {
-  type: 'ado-pr';
-  name: string;
-  pollTimeoutMinutes: number;
-  pollIntervalSeconds: number;
-  skipIfNoPr: boolean;
-  /** When true, blocking human-review policies (reviewer approvals, comment
-   *  requirements) no longer hold the gate — only automated policies do. */
-  ignoreHumanPolicies?: boolean;
-}
-
-export interface ReviewAssertion {
-  type: 'opencode-review';
-  name: string;
-  agent: string;
-  prompt?: string;
-  timeoutSeconds: number;
-}
-
-export type GateAssertion = CommandAssertion | AdoPrAssertion | ReviewAssertion;
-
-export interface GateConfig {
-  enabled: boolean;
-  maxRetries: number;
-  assertions: GateAssertion[];
-}
-
-// ---------------------------------------------------------------------------
-// Pure helpers
-// ---------------------------------------------------------------------------
-
-export function truncateTail(text: string, maxLines = 50): string {
-  const lines = text
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .filter((l) => l.trim() !== '');
-  if (lines.length <= maxLines) return lines.join('\n');
-  return `[... ${lines.length - maxLines} earlier lines omitted]\n${lines.slice(-maxLines).join('\n')}`;
-}
+export {
+  buildShellInvocation,
+  execFileOut,
+  execShell,
+  quoteWin,
+  runCommand,
+  truncateTail,
+} from './process.js';
+export type {
+  AdoPrAssertion,
+  AdoPrPollOptions,
+  AssertionOutcome,
+  BuildLogArtifact,
+  BuildLogArtifactRunner,
+  BuildLogDownloadOptions,
+  BuildLogExtractor,
+  CommandAssertion,
+  GateAssertion,
+  GateConfig,
+  PolicyEvaluationMinimal,
+  ProcessOutcome,
+  ReviewAssertion,
+  ReviewSessionClient,
+  ShellFn,
+  ShellInvocation,
+  TerminalBuildFailure,
+} from './types.js';
 
 function positiveInt(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
@@ -156,86 +140,6 @@ export function loadGateConfig(
   }
   if (!config) return null;
   return { path, projectRoot: dirname(dirname(path)), config }; // strip ".opencode/<file>"
-}
-
-// ---------------------------------------------------------------------------
-// Process runners
-// ---------------------------------------------------------------------------
-
-export interface ProcessOutcome {
-  code: number | null;
-  timedOut: boolean;
-  stdout: string;
-  stderr: string;
-}
-
-function outcomeFromErr(err: (Error & { code?: unknown; killed?: boolean }) | null): number | null {
-  if (!err) return 0;
-  return typeof err.code === 'number' ? err.code : null;
-}
-
-export function runCommand(cmd: string, cwd: string, timeoutMs: number): Promise<ProcessOutcome> {
-  return new Promise((resolve) => {
-    let childTimedOut = false; // declared BEFORE exec so the callback closure sees it initialized
-    const child = exec(
-      cmd,
-      { cwd, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        clearTimeout(timer);
-        resolve({
-          code: outcomeFromErr(err),
-          timedOut: Boolean(err && err.killed) || childTimedOut,
-          stdout: stdout?.toString() ?? '',
-          stderr: stderr?.toString() ?? '',
-        });
-      }
-    );
-    const timer = setTimeout(() => {
-      childTimedOut = true;
-      try {
-        child.kill();
-      } catch {
-        // child already exited — nothing to kill
-      }
-      if (process.platform === 'win32' && child.pid) {
-        exec(`taskkill /PID ${child.pid} /T /F`, { windowsHide: true }, () => {});
-      }
-    }, timeoutMs);
-  });
-}
-
-export function execFileOut(
-  file: string,
-  args: string[],
-  cwd: string,
-  timeoutMs: number,
-  spawnOpts?: SpawnOptions
-): Promise<ProcessOutcome> {
-  return new Promise((resolve) => {
-    execFile(
-      file,
-      args,
-      { cwd, windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, ...spawnOpts },
-      (err, stdout, stderr) => {
-        resolve({
-          code: outcomeFromErr(err),
-          timedOut: Boolean(err && err.killed),
-          stdout: stdout?.toString() ?? '',
-          stderr: stderr?.toString() ?? '',
-        });
-      }
-    );
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Assertion outcomes
-// ---------------------------------------------------------------------------
-
-export interface AssertionOutcome {
-  name: string;
-  passed: boolean;
-  evidence: string;
 }
 
 function pass(name: string): AssertionOutcome {
@@ -722,35 +626,12 @@ export function pickActivePr(prListJson: string): PickPrResult {
 const GREEN_POLICY_STATUSES = new Set(['approved', 'succeeded', 'notapplicable']);
 const IN_PROGRESS_POLICY_STATUSES = new Set(['queued', 'running']);
 
-export interface PolicyEvaluationMinimal {
-  configuration?: { isBlocking?: boolean; isRequired?: boolean; type?: { displayName?: string } };
-  status?: string;
-  context?: {
-    buildId?: number | string | null;
-    buildDefinitionName?: string;
-    buildOutputPreview?: {
-      jobName?: string;
-      taskName?: string;
-      errors?: Array<{ message?: string | null }>;
-    } | null;
-  } | null;
-}
-
 /** Policy types that only a human can turn green (approvals, comment threads).
  *  Matched case-insensitively against configuration.type.displayName. */
 const HUMAN_POLICY_RE = /minimum number of reviewers|required reviewers|comment requirements/i;
 
 export function isHumanReviewPolicy(e: PolicyEvaluationMinimal): boolean {
   return HUMAN_POLICY_RE.test(String(e?.configuration?.type?.displayName ?? ''));
-}
-
-export interface TerminalBuildFailure {
-  buildId: number | null;
-  status: string;
-  definitionName?: string;
-  jobName?: string;
-  taskName?: string;
-  previewErrors: string[];
 }
 
 function parseBuildId(value: unknown): number | null {
@@ -892,95 +773,9 @@ export function requiredPoliciesGreen(
   return { green: true, retryable: false, detail: greenDetail };
 }
 
-export type ShellFn = (args: string[], cwd: string, timeoutMs: number) => Promise<string>;
-
-/**
- * Quote a single token for a cmd.exe command line (Windows only).
- * Tokens containing whitespace, double quotes or cmd metacharacters are wrapped
- * in double quotes with inner quotes doubled (cmd's "" convention).
- */
-export function quoteWin(s: string): string {
-  return /[\s"^&|<>]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-export interface ShellInvocation {
-  file: string;
-  args: string[];
-}
-
-/**
- * Build the execFile invocation for a shell command.
- * - win32: route through cmd.exe (/d /s /c) because `az` is az.cmd and git/npm
- *   shims are batch files that Node refuses to spawn without a shell
- *   (CVE-2024-27980 hardening). The caller must pass the result to execFileOut
- *   with windowsVerbatimArguments so our quoting reaches cmd untouched; /s makes
- *   cmd strip exactly the outer quotes we add around the joined command line.
- * - other platforms: direct argv passthrough.
- */
-export function buildShellInvocation(args: string[]): ShellInvocation {
-  if (process.platform !== 'win32') return { file: args[0], args: args.slice(1) };
-  const cmdline = [args[0], ...args.slice(1)].map(quoteWin).join(' ');
-  return { file: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', `"${cmdline}"`] };
-}
-
-/**
- * Production ShellFn built on execFileOut; rejects with actionable stderr.
- *
- * CONSTRAINT: every element of `args` must be an operator-controlled token
- * (fixed CLI flags, branch names, numeric PR ids, repo paths) — never raw,
- * untrusted user input. On Windows the tokens are re-quoted onto a single
- * cmd.exe command line, which is safe ONLY under that constraint.
- *
- * Tree-kill semantics: execFileOut's timeout kills the DIRECT child. On win32
- * that child is cmd.exe — its /c grandchildren may linger past a timeout.
- */
-export const execShell: ShellFn = async (args, cwd, timeoutMs) => {
-  const inv = buildShellInvocation(args);
-  const r = await execFileOut(inv.file, inv.args, cwd, timeoutMs, {
-    windowsVerbatimArguments: true,
-  });
-  if (r.timedOut) throw new Error(`${args[0]} timed out`);
-  if (r.code !== 0) {
-    const detail = truncateTail([r.stderr, r.stdout].filter((s) => s.trim()).join('\n'), 20);
-    throw new Error(`${args.join(' ')} failed (code ${r.code}):\n${detail}`);
-  }
-  return r.stdout;
-};
-
 // ---------------------------------------------------------------------------
 // Failed Build log artifacts
 // ---------------------------------------------------------------------------
-
-export interface BuildLogArtifact {
-  buildId: number;
-  archivePath?: string;
-  extractedPath?: string;
-  error?: string;
-}
-
-export type BuildLogExtractor = (
-  archivePath: string,
-  destination: string,
-  cwd: string,
-  timeoutMs: number
-) => Promise<void>;
-
-export interface BuildLogDownloadOptions {
-  /** Parent directory for the per-download work dir; defaults to <tmpdir>/opencode. */
-  tempRoot?: string;
-  /** Timeout for both the az download and the extraction; defaults to 120s. */
-  timeoutMs?: number;
-  shell?: ShellFn;
-  extract?: BuildLogExtractor;
-  isAborted?: () => boolean;
-}
-
-export type BuildLogArtifactRunner = (
-  projectName: string,
-  buildId: number,
-  cwd: string,
-  isAborted?: () => boolean
-) => Promise<BuildLogArtifact>;
 
 const BUILD_LOG_TIMEOUT_MS = 120_000;
 
@@ -1100,21 +895,6 @@ export const defaultBuildLogArtifact: BuildLogArtifactRunner = (
   cwd,
   isAborted
 ) => downloadBuildLogs(projectName, buildId, cwd, { isAborted });
-
-export interface AdoPrPollOptions {
-  /** Waits between poll rounds; defaults to a real setTimeout. */
-  sleep?: (ms: number) => Promise<void>;
-  /** Clock used for the polling deadline baseline and checks; defaults to Date.now. */
-  now?: () => number;
-  /** Checked at each poll-round boundary; when it fires the assertion aborts. */
-  isAborted?: () => boolean;
-  /**
-   * Downloads + extracts failed Build logs on terminal Build-policy failures.
-   * Defaults to {@link defaultBuildLogArtifact} (az devops invoke + tar);
-   * tests inject fakes here.
-   */
-  buildLogArtifact?: BuildLogArtifactRunner;
-}
 
 export async function runAdoPrAssertion(
   a: AdoPrAssertion,
@@ -1275,14 +1055,6 @@ export function parseVerdict(output: string): 'PASS' | 'FAIL' | null {
 //   session.abort({ path: { id } })                        -> boolean
 // hey-api clients resolve to { data?, error? }; unwrapSdk also accepts payloads
 // returned directly, so unit tests can pass simpler fakes.
-export interface ReviewSessionClient {
-  session: {
-    create(options?: unknown): Promise<unknown>;
-    prompt(options: unknown): Promise<unknown>;
-    abort?(options: unknown): Promise<unknown>;
-  };
-}
-
 function unwrapSdk<T>(res: unknown): T {
   if (res && typeof res === 'object' && ('data' in res || 'error' in res)) {
     const r = res as { data?: T; error?: unknown };
@@ -1310,20 +1082,6 @@ function reviewerText(res: unknown): string {
     })
     .map((p) => String(p.text ?? ''))
     .join('\n');
-}
-
-function describeSdkError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  if (err && typeof err === 'object' && 'message' in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === 'string') return message;
-  }
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
 }
 
 /**
