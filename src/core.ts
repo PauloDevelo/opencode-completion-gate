@@ -384,23 +384,23 @@ export function parseOnlyCommand(remainder: string): {
   let trailing: number | null = null;
   let invalid = false;
 
-  const leadingMatch = /^--(?:retries|max-retries)\s+(\S+)\s*/i.exec(body);
+  const leadingMatch = /^--(?:retries|max-retries)(?:\s+|=)(\S+)\s*/i.exec(body);
   if (leadingMatch) {
     const parsed = parsePositiveIntToken(leadingMatch[1]);
     if (parsed === null) invalid = true;
     else leading = parsed;
     body = body.slice(leadingMatch[0].length).trim();
-  } else if (/^--(?:retries|max-retries)(\s|$)/i.test(body)) {
+  } else if (/^--(?:retries|max-retries)(?:\s*=\s*)?$/i.test(body)) {
     invalid = true;
   }
 
-  const trailingMatch = /\s+--(?:retries|max-retries)\s+(\S+)\s*$/i.exec(body);
+  const trailingMatch = /\s+--(?:retries|max-retries)(?:\s+|=)(\S+)\s*$/i.exec(body);
   if (trailingMatch) {
     const parsed = parsePositiveIntToken(trailingMatch[1]);
     if (parsed === null) invalid = true;
     else trailing = parsed;
     body = body.slice(0, trailingMatch.index).trim();
-  } else if (/\s+--(?:retries|max-retries)\s*$/i.test(body)) {
+  } else if (/\s+--(?:retries|max-retries)(?:\s*=\s*)?$/i.test(body)) {
     invalid = true;
   }
 
