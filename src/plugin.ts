@@ -13,6 +13,6 @@
 // default-export the plugin and nothing else. All implementation code and
 // test-facing exports live in ./core (subdirectories are not scanned as
 // plugin origins).
-import gate from './gate.js';
+import gate from './core.js';
 
 export default gate;
