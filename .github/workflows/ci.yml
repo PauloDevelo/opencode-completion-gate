@@ -43,7 +43,12 @@ jobs:
         run: npm run build
 
       - name: Test
+        run: npm run test:coverage
+        if: matrix.node-version == 20
+
+      - name: Test (without coverage)
         run: npm test
+        if: matrix.node-version != 20
 
   # Summary job that can be used as a required status check
   ci-success:
