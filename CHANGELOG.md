@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.1.0...v1.1.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* parse equals-form retry overrides ([7473ee7](https://github.com/PauloDevelo/opencode-completion-gate/commit/7473ee770af1e8cf21a00e54fd3fe7d7251dd66e))
+
 ## [1.1.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.0.0...v1.1.0) (2026-09-06)
 
 
