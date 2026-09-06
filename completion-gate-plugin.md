@@ -1,6 +1,6 @@
 # Completion Gate Plugin
 
-Per-session quality gate that blocks an agent from declaring a task "done" until configured assertions pass. Implemented in [`completion-gate.ts`](completion-gate.ts) (entry point re-exporting [`completion-gate/core.ts`](completion-gate/core.ts)); loaded globally via `~/.config/opencode`.
+Per-session quality gate that blocks an agent from declaring a task "done" until configured assertions pass. Implemented in [`src/plugin.ts`](src/plugin.ts) (default-export-only entry re-exporting [`src/core.ts`](src/core.ts), built to `dist/plugin.js`); loaded via the `plugin` field in `opencode.json` (see `README.md`).
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Typical workflow:
 
 ```
 /gate          # enable (same as /gate on)
-/gate status   # e.g. "[completion-gate] status: ENABLED · retries=1 · lastOutcome=fail"
+/gate status   # e.g. "Completion gate: ENABLED · retries=1 · lastOutcome=fail · extraCommand=none · mode=combined"
 /gate off      # disable for this session
 /gate "python scripts/assert_task_done.py"  # run a custom command before configured assertions
 /gate --only "python scripts/assert_task_done.py"  # run only this command; skip configured assertions
@@ -39,8 +39,9 @@ consumes them one-shot on `session.created`, enables the gate, and confirms
 with a toast carrying the command (`Completion gate armed (<mode>): <command>`)
 — nothing enters the chat transcript. The legacy
 `[completion-gate-internal] --only <command>` first-line chat directive remains
-supported as a fallback (stripped from the model payload before delivery);
-users should continue to use `/gate` or `/gate --only` interactively.
+supported as a fallback (stripped from the model payload before delivery;
+only the `--only` variant is handled — a bare internal marker without `--only`
+is ignored); users should continue to use `/gate` or `/gate --only` interactively.
 
 The state is **in-memory per session** — no gate state is persisted. After the OpenCode server restarts, a session starts disabled, so invoke `/gate` again to enable it. A custom command set with `/gate "command"` is also session-only and uses a default timeout of **300 seconds**.
 
@@ -54,7 +55,7 @@ When a custom command is configured, `/gate "command"` runs it **first** at ever
 
 The slash command is handled by the plugin's `command.execute.before` hook before its markdown template reaches the model. If an existing or resumed **top-level** session has no in-memory state, the hook lazily registers it from the session metadata, then applies `/gate`, `/gate on`, `/gate off`, `/gate status`, `/gate "command"`, or `/gate --only "command"`. The hook toggles, reports, or configures the per-session state, shows a toast confirmation (`Completion gate enabled/disabled`, status, or command registration), clears the command parts, and then **aborts the command flow so the model stays idle — no LLM turn is dispatched**.
 
-Why the abort: OpenCode unconditionally runs an agent turn after every slash command. Empty parts do *not* suppress it, and an empty turn right after real work can make the model re-emit the previous turn's tool calls. There is no supported skip flag on the stable channel ([upstream issue](https://github.com/anomalyco/opencode/issues/28292); fix PR [anomalyco/opencode#46579](https://github.com/anomalyco/opencode/pull/46579) is open but unmerged), so the plugin throws a sentinel error carrying the confirmation text out of `command.execute.before` — the documented workaround — after arming the gate and showing the toast. The hook also sets `output.noReply = true` (forward-compatible: harmless no-op today, honored once the upstream PR lands). To fall back to parts-clearing only, set `ABORT_COMMAND_TURN = false` in `completion-gate/core.ts` (the turn will fire again — not recommended).
+Why the abort: OpenCode unconditionally runs an agent turn after every slash command. Empty parts do *not* suppress it, and an empty turn right after real work can make the model re-emit the previous turn's tool calls. There is no supported skip flag on the stable channel ([upstream issue](https://github.com/anomalyco/opencode/issues/28292); fix PR [anomalyco/opencode#46579](https://github.com/anomalyco/opencode/pull/46579) is open but unmerged), so the plugin throws a sentinel error carrying the confirmation text out of `command.execute.before` — the documented workaround — after arming the gate and showing the toast. The hook also sets `output.noReply = true` (forward-compatible: harmless no-op today, honored once the upstream PR lands). To fall back to parts-clearing only, set `ABORT_COMMAND_TURN = false` in `src/core.ts` (the turn will fire again — not recommended).
 
 Because the aborted turn produces no fresh idle event, enabling via `/gate` **kicks an immediate evaluation** in the background — the gate validates right away instead of staying dormant until your next real turn (the `busy` flag serializes this with later idle evaluations). If the session directory resolves to no config and no session command is set, enabling also shows an error toast (`…nothing to run: no .opencode/completion-gate.json found from <dir>`) so a mis-scoped session is obvious instead of silently idle — check `gate-diag.log` for the exact lookup start directory.
 
@@ -66,9 +67,9 @@ Deleted or unavailable sessions, sessions with malformed metadata, and subagent 
 
 ## Configuration
 
-Config lives per project at `<project-root>/.opencode/completion-gate.json`. The plugin walks up from the session's directory to the git root looking for it, so worktrees resolve their own copy (in this repo's setup the `.opencode/` junction links back here). The config is **re-read on every gated turn end** — edits apply without restarting.
+Config lives per project at `<project-root>/.opencode/completion-gate.json`. The plugin walks up from the session's directory to the git root looking for it, so worktrees resolve their own copy. The config is **re-read on every gated turn end** — edits apply without restarting.
 
-Example (`workspaces/derceto/AquadvancedEnergy/.opencode/completion-gate.json`):
+Example (`<project-root>/.opencode/completion-gate.json`):
 
 ```json
 {
@@ -85,7 +86,7 @@ Example (`workspaces/derceto/AquadvancedEnergy/.opencode/completion-gate.json`):
 
 | Field | Applies to | Default | Description |
 |---|---|---|---|
-| `enabled` | project | *(must be `true`)* | `false` (or missing config) silently skips the gate for the project |
+| `enabled` | project | `true` | `false` (or a missing/unparsable config) silently skips the gate; a missing `enabled` field still gates — always write it explicitly |
 | `maxRetries` | project | `3` | Auto-fix injections allowed per fix cycle before escalation |
 | `assertions` | project | *(required)* | At least one assertion; empty array disables the gate |
 | `name` | all | see below | Label used in reports; falls back to first token of `run` (`command`), `ado-pr`, or `self-review` (`opencode-review`) |
@@ -143,7 +144,7 @@ With the flag on, a green result reports what was skipped, e.g. `4 required poli
 
 Policy polling distinguishes pending from terminal states. `queued` and `running` are retried; `approved`, `succeeded`, and `notApplicable` pass; `rejected` and `broken` fail immediately. Unknown statuses on automated policies also fail immediately so the gate does not hide an API-shape or policy-state change behind a polling timeout. Human-review policies remain retryable when they are not ignored, because their state can change after manual action.
 
-**Field shapes** were calibrated against live `az repos pr list` / `az repos pr policy list` payloads (sanitized fixtures in `completion-gate-tests/fixtures/`). If a real PR trips an unparsable-shape failure, check `gate-diag.log` and report the mismatch.
+**Field shapes** were calibrated against live `az repos pr list` / `az repos pr policy list` payloads (sanitized fixtures in `tests/fixtures/`). If a real PR trips an unparsable-shape failure, check `gate-diag.log` and report the mismatch.
 
 #### Failed Build log artifacts
 
@@ -203,7 +204,7 @@ Set `OPENCODE_GATE_DISABLED=1` to suspend all gate evaluations. Like `/gate off`
 
 ## Diagnostics log
 
-Every gate activity is appended to `~/.config/opencode/gate-diag.log` (in this repo's setup that resolves to `global_config/gate-diag.log`). The log traces the full turn-end flow, so you can see exactly where a run is at any moment:
+Every gate activity is appended to `~/.config/opencode/gate-diag.log`. The log traces the full turn-end flow, so you can see exactly where a run is at any moment:
 
 ```
 session <id> went idle — gate turn-end starting
@@ -229,8 +230,8 @@ Also logged: session registrations, successful lazy registration, skipped subage
 
 | Symptom | Check |
 |---|---|
-| Gate never fires | `/gate status` — is it enabled? If enabling showed a `…nothing to run` error toast, the session directory resolves to no config: check `gate-diag.log` for the lookup start directory (worktree sessions resolve their own `.opencode/` junction — a missing/mislinked junction means the config is never found). For an existing/resumed session, `/gate status` or `/gate on` also triggers lazy registration when in-memory state is missing. Then check `gate-diag.log` for successful registration, a skipped subagent, rejected metadata, or a lookup failure. Does `<project-root>/.opencode/completion-gate.json` exist with `"enabled": true` and ≥1 assertion? Are you in the main session (not a subagent)? |
-| Agent cannot read `.opencode/completion-gate.json` | The worktree `.opencode/` is a junction back to this repo, and opencode resolves junctions before permission checks — the read evaluates against `permission.external_directory` using the canonical path. The project's `opencode.json` (in this repo: `workspaces/<org>/<Project>/opencode.json`) must allow it: `"D:/workspaces/perso/opencode-config/workspaces/<org>/<Project>/.opencode/**": "allow"`. Regression tests: `agent-tests/tests/build/gate-config-read-*.yaml`. |
+| Gate never fires | `/gate status` — is it enabled? If enabling showed a `…nothing to run` error toast, the session directory resolves to no config: check `gate-diag.log` for the lookup start directory. For an existing/resumed session, `/gate status` or `/gate on` also triggers lazy registration when in-memory state is missing. Then check `gate-diag.log` for successful registration, a skipped subagent, rejected metadata, or a lookup failure. Does `<project-root>/.opencode/completion-gate.json` exist with `"enabled": true` and ≥1 assertion? Are you in the main session (not a subagent)? |
+| Agent cannot read `.opencode/completion-gate.json` | If the project's `.opencode/` is a symlink/junction (e.g. worktree setups), opencode resolves it before permission checks — the read is evaluated against `permission.external_directory` using the canonical path, so the project's `opencode.json` must allow that canonical path. |
 | Toggle does nothing / odd behavior | For a resumed session, run `/gate status` first to trigger or confirm lazy registration, then inspect `~/.config/opencode/gate-diag.log` (see [Diagnostics log](#diagnostics-log)) for successful registration, a skipped subagent, rejected metadata, or a lookup failure. |
 | Gate keeps re-running while waiting for reviewers/comments on a PR | Those are human-review policies; set `"ignoreHumanPolicies": true` on the `ado-pr` assertion (see [ado-pr](#ado-pr)) or resolve them manually. |
 | `/gate off` didn't stop the current run instantly | An already-started command/poll round finishes first; the abort lands at the next checkpoint and logs `gate turn-end ABORTED`. |
@@ -238,4 +239,4 @@ Also logged: session registrations, successful lazy registration, skipped subage
 | Build log artifacts missing | Check the reported ZIP path and the `Build log artifact error:` line in the evidence, then `gate-diag.log`. No logs are downloaded while the build policy is still `queued` or `running` — only after a terminal failure; a retry cycle re-downloads for a newly failed build. |
 | Review assertion fails with "no VERDICT line" | The reviewer agent didn't end with `VERDICT: PASS/FAIL`; inspect the captured output tail in the failure message or raise `timeoutSeconds`. |
 | Commands hang or time out | Tune `timeoutSeconds` (default 300s); timeouts kill the whole process tree and count as failure. |
-| Config changes not picked up | The file is re-read each turn end — verify the path actually resolves (worktree `.opencode/` is a junction back to this repo's `workspaces/<org>/<Project>/.opencode/`, so edit there or through the junction; both hit the same files). |
+| Config changes not picked up | The file is re-read each turn end — verify the resolved path in `gate-diag.log` is the file you edited (when `.opencode/` is a symlink/junction, editing through either side hits the same file). |

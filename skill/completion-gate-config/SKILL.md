@@ -214,4 +214,4 @@ node -e "JSON.parse(require('fs').readFileSync('.opencode/completion-gate.json',
 
 For any inaccuracies or corrections needed in this skill, follow the standard workflow defined in the `skill-feedback` skill. All corrections must be delegated to the `@skill-feedback` agent.
 
-Full plugin documentation: `plugin/completion-gate-plugin.md` in the opencode-config repository (`global_config/`).
+Full plugin documentation: `completion-gate-plugin.md` at the repository root.
