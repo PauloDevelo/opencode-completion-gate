@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempProject } from './helpers.js';
 
 const RETRY_ENV = 'OPENCODE_GATE_BOOTSTRAP_MAX_RETRIES';
@@ -13,25 +13,25 @@ function makeFakeClient() {
       promptAsync: vi.fn(async () => ({ info: {}, parts: [] })),
     },
     tui: { showToast: vi.fn(async () => {}) },
-  } as any;
+  } as unknown;
 }
 
-async function freshHooks(client: any) {
+async function freshHooks(client: unknown) {
   vi.resetModules();
   const mod = await import('../src/core.js');
-  const hooks = await (mod.default as any)({ client });
+  const hooks = await (mod.default as unknown)({ client });
   return { hooks, mod };
 }
 
-async function runGateSlash(hooks: any, sessionID: string, args: string, text: string) {
-  const out = { parts: [{ type: 'text', text }] } as any;
+async function runGateSlash(hooks: unknown, sessionID: string, args: string, text: string) {
+  const out = { parts: [{ type: 'text', text }] } as unknown;
   await expect(
     hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out)
   ).rejects.toThrow();
   return out;
 }
 
-async function registerSession(hooks: any, id: string, directory: string) {
+async function registerSession(hooks: unknown, id: string, directory: string) {
   await hooks.event({
     event: {
       type: 'session.created',
@@ -40,7 +40,7 @@ async function registerSession(hooks: any, id: string, directory: string) {
   });
 }
 
-function lastToast(client: any): string {
+function lastToast(client: unknown): string {
   return client.tui.showToast.mock.calls.at(-1)[0].body.message as string;
 }
 
@@ -116,7 +116,7 @@ describe('--only --retries override (RED)', () => {
       '[completion-gate] --only --retries 4 node -e "process.exit(0)"'
     );
     expect(lastToast(client)).toBe(
-      'Completion gate armed (command-only): node -e "process.exit(0)" · maxRetries=4'
+      'Completion gate armed (command-only): node -e "process.exit(0)" Â· maxRetries=4'
     );
     await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
     expect(lastToast(client)).toContain('maxRetries=4 (session)');
@@ -304,7 +304,7 @@ describe('--only --retries override (RED)', () => {
           text: '[completion-gate-internal] --only node -e "process.exit(0)" --retries 3',
         },
       ],
-    } as any);
+    } as unknown);
     await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
     expect(lastToast(client)).toContain('maxRetries=3 (session)');
   });

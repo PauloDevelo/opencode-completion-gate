@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+﻿import { describe, expect, it, vi } from 'vitest';
 import { parseVerdict, runReviewAssertion } from '../src/core.js';
 import type { ReviewAssertion, ReviewSessionClient } from '../src/core.js';
 
@@ -52,10 +52,10 @@ function fakeClient(opts: FakeClientOptions = {}) {
       })
   );
   const client: ReviewSessionClient & { session: Record<string, ReturnType<typeof vi.fn>> } = {
-    session: { create: create as any, prompt: prompt as any },
+    session: { create: create as unknown, prompt: prompt as unknown },
   };
   const abort = vi.fn(async () => ({ data: true, error: undefined }));
-  if (opts.abort !== false) (client.session as any).abort = abort;
+  if (opts.abort !== false) (client.session as unknown).abort = abort;
   return { client, create, prompt, abort };
 }
 
@@ -73,7 +73,7 @@ describe('runReviewAssertion (SDK reviewer session)', () => {
     expect(f.create.mock.calls[0][0]).toEqual({ query: { directory: 'C:/proj' } });
 
     expect(f.prompt).toHaveBeenCalledTimes(1);
-    const call = f.prompt.mock.calls[0][0] as any;
+    const call = f.prompt.mock.calls[0][0] as unknown;
     expect(call.path).toEqual({ id: 'rev-s1' });
     expect(call.body.agent).toBe('reviewer');
     expect(call.body.parts[0].text).toContain('Check it.');
@@ -161,7 +161,7 @@ describe('runReviewAssertion (SDK reviewer session)', () => {
     expect(r1.evidence).toContain('timed out');
 
     const throwingAbort = fakeClient({ promptNeverResolves: true });
-    (throwingAbort.abort as any).mockRejectedValue(new Error('abort failed'));
+    (throwingAbort.abort as unknown).mockRejectedValue(new Error('abort failed'));
     const r2 = await runReviewAssertion(
       { ...a, timeoutSeconds: 1 },
       'C:/proj',

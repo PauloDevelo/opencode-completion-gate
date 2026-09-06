@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
@@ -16,20 +16,20 @@ function makeFakeClient() {
       promptAsync: vi.fn(async () => ({ info: {}, parts: [] })),
     },
     tui: { showToast: vi.fn(async () => {}) },
-  } as any;
+  } as unknown;
 }
 
-async function freshHooks(client: any) {
+async function freshHooks(client: unknown) {
   vi.resetModules();
   const mod = await import('../src/core.js');
-  return { hooks: await (mod.default as any)({ client }) };
+  return { hooks: await (mod.default as unknown)({ client }) };
 }
 
 function toB64(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64');
 }
 
-function fireCreated(hooks: any, id: string, directory: string) {
+function fireCreated(hooks: unknown, id: string, directory: string) {
   return hooks.event({
     event: {
       type: 'session.created',
@@ -38,7 +38,7 @@ function fireCreated(hooks: any, id: string, directory: string) {
   });
 }
 
-function fireIdle(hooks: any, sessionID: string) {
+function fireIdle(hooks: unknown, sessionID: string) {
   return hooks.event({
     event: { type: 'session.status', properties: { sessionID, status: { type: 'idle' } } },
   });

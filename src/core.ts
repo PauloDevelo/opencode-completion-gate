@@ -82,7 +82,7 @@ function positiveInt(v: unknown, fallback: number): number {
 
 function validateGateConfig(raw: unknown): GateConfig | null {
   if (!raw || typeof raw !== 'object') return null;
-  const obj = raw as Record<string, any>;
+  const obj = raw as Record<string, unknown>;
   if (obj.enabled === false) return null;
   if (!Array.isArray(obj.assertions)) return null;
   const assertions: GateAssertion[] = [];
@@ -169,7 +169,7 @@ export interface ProcessOutcome {
   stderr: string;
 }
 
-function outcomeFromErr(err: (Error & { code?: any; killed?: boolean }) | null): number | null {
+function outcomeFromErr(err: (Error & { code?: unknown; killed?: boolean }) | null): number | null {
   if (!err) return 0;
   return typeof err.code === 'number' ? err.code : null;
 }
@@ -350,6 +350,22 @@ const INJECTED_SUCCESS_RE = /^✅ Completion gate passed \([^\n]*\)\. You may re
 
 type GateMode = 'combined' | 'command-only';
 
+interface HookOutput {
+  parts?: Array<{ type?: string; text?: string }>;
+  noReply?: boolean;
+}
+
+interface PluginClient {
+  session: {
+    get(options: unknown): Promise<unknown>;
+    create(options?: unknown): Promise<unknown>;
+    prompt(options: unknown): Promise<unknown>;
+    abort?(options: unknown): Promise<unknown>;
+    promptAsync(options: unknown): Promise<unknown>;
+  };
+  tui: { showToast(options: unknown): Promise<unknown> };
+}
+
 interface GateSessionState {
   sessionID: string;
   directory: string;
@@ -482,7 +498,7 @@ function createGateSessionState(sessionID: string, directory: string): GateSessi
 }
 
 async function getOrRegisterSession(
-  client: any,
+  client: PluginClient,
   sessionID: string
 ): Promise<GateSessionState | null> {
   const existing = sessions.get(sessionID);
@@ -523,7 +539,7 @@ async function getOrRegisterSession(
 }
 
 async function safeToast(
-  client: any,
+  client: PluginClient,
   message: string,
   variant: 'info' | 'error' = 'info'
 ): Promise<void> {
@@ -535,7 +551,7 @@ async function safeToast(
   }
 }
 
-function clearParts(output: any): void {
+function clearParts(output: HookOutput): void {
   // Toast-only /gate: leave nothing in the chat transcript or model payload.
   // Mutating in place preserves the hook's output object identity.
   if (Array.isArray(output?.parts)) output.parts.length = 0;
@@ -555,7 +571,7 @@ const ABORT_COMMAND_TURN = true;
 type ToggleKind = 'enabled' | 'disabled' | 'status' | 'usage';
 
 async function applyToggle(
-  client: any,
+  client: PluginClient,
   state: GateSessionState,
   rawArgument: string
 ): Promise<{ notice: string; kind: ToggleKind }> {
@@ -628,7 +644,7 @@ async function applyToggle(
 
 // Warn at enable time when there is nothing to run: without this, an enabled
 // gate on a session whose directory resolves to no config looks dead.
-async function warnIfNothingToRun(client: any, state: GateSessionState): Promise<void> {
+async function warnIfNothingToRun(client: PluginClient, state: GateSessionState): Promise<void> {
   if (state.extraCommand) return;
   if (loadGateConfig(state.directory)) return;
   const msg = `Completion gate enabled but nothing to run: no .opencode/completion-gate.json found from ${state.directory}.`;
@@ -640,13 +656,13 @@ async function warnIfNothingToRun(client: any, state: GateSessionState): Promise
 // via slash aborts the command turn, so no fresh idle event follows to kick
 // the gate — without this the gate would stay dormant until the next real
 // turn. Shared with the idle handler; the busy flag serializes overlaps.
-function kickGateTurnEnd(client: any, state: GateSessionState, reason: string): void {
+function kickGateTurnEnd(client: PluginClient, state: GateSessionState, reason: string): void {
   if (state.deleted || !state.gateEnabled || state.busy) return;
   if (process.env.OPENCODE_GATE_DISABLED === '1') return;
   state.busy = true;
   logDiag(`gate kick on ${state.sessionID} (${reason}) — evaluation starting`);
   runGateTurnEnd(client, state)
-    .catch((err: any) => logDiag(`gate flow error: ${err?.message ?? err}`))
+    .catch((err: unknown) => logDiag(`gate flow error: ${describeSdkError(err)}`))
     .finally(() => {
       state.busy = false;
     });
@@ -680,7 +696,11 @@ export function pickActivePrDetails(prListJson: string): PickPrDetailsResult {
   // Real `az repos pr list --output json` payloads carry the numeric id in
   // `pullRequestId` (verified live); accept plain `id` as a fallback.
   const ids = parsed
-    .map((p: any) => (typeof p?.pullRequestId === 'number' ? p.pullRequestId : p?.id))
+    .map((p: unknown) => {
+      if (!p || typeof p !== 'object') return undefined;
+      const entry = p as { pullRequestId?: unknown; id?: unknown };
+      return typeof entry.pullRequestId === 'number' ? entry.pullRequestId : entry.id;
+    })
     .filter((n): n is number => typeof n === 'number');
   if (ids.length !== parsed.length) {
     return { ok: false, reason: 'unparsable', detail: 'PR entries missing numeric pullRequestId' };
@@ -693,9 +713,14 @@ export function pickActivePrDetails(prListJson: string): PickPrDetailsResult {
     };
   }
   const projectName =
-    typeof (parsed[0] as any)?.repository?.project?.name === 'string' &&
-    (parsed[0] as any).repository.project.name.trim()
-      ? (parsed[0] as any).repository.project.name
+    typeof (parsed[0] as { repository?: { project?: { name?: unknown } } }).repository?.project
+      ?.name === 'string' &&
+    (
+      (parsed[0] as { repository?: { project?: { name?: unknown } } }).repository?.project
+        ?.name as string
+    ).trim()
+      ? ((parsed[0] as { repository?: { project?: { name?: unknown } } }).repository?.project
+          ?.name as string)
       : undefined;
   return projectName ? { ok: true, prId: ids[0], projectName } : { ok: true, prId: ids[0] };
 }
@@ -1016,10 +1041,10 @@ export async function downloadBuildLogs(
   let workDir: string;
   try {
     workDir = mkdtempSync(join(root, `completion-gate-logs-${buildId}-`));
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       buildId,
-      error: `could not create artifact directory under ${root}: ${err?.message ?? String(err)}`,
+      error: `could not create artifact directory under ${root}: ${describeSdkError(err)}`,
     };
   }
 
@@ -1054,11 +1079,11 @@ export async function downloadBuildLogs(
       cwd,
       timeoutMs
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     logDiag(
-      `build-logs "${projectName}" #${buildId}: download failed — ${brief(String(err?.message ?? err))}`
+      `build-logs "${projectName}" #${buildId}: download failed — ${brief(describeSdkError(err))}`
     );
-    return { buildId, error: `download failed: ${err?.message ?? String(err)}` };
+    return { buildId, error: `download failed: ${describeSdkError(err)}` };
   }
   if (!existsSync(archivePath)) {
     logDiag(`build-logs "${projectName}" #${buildId}: az exited zero but wrote no archive file`);
@@ -1073,8 +1098,8 @@ export async function downloadBuildLogs(
     await extract(archivePath, destination, cwd, timeoutMs);
     result.extractedPath = destination;
     logDiag(`build-logs "${projectName}" #${buildId}: extracted to ${destination}`);
-  } catch (err: any) {
-    result.error = `extraction failed: ${err?.message ?? String(err)}`;
+  } catch (err: unknown) {
+    result.error = `extraction failed: ${describeSdkError(err)}`;
     logDiag(`build-logs "${projectName}" #${buildId}: extraction failed — ${brief(result.error)}`);
   }
   return result;
@@ -1120,8 +1145,8 @@ export async function runAdoPrAssertion(
   logDiag(`ado-pr "${a.name}": resolving current branch`);
   try {
     branch = (await shell(['git', '-C', cwd, 'branch', '--show-current'], cwd, 10_000)).trim();
-  } catch (err: any) {
-    return fail(a.name, `could not resolve current branch: ${err?.message ?? String(err)}`);
+  } catch (err: unknown) {
+    return fail(a.name, `could not resolve current branch: ${describeSdkError(err)}`);
   }
   if (!branch) return fail(a.name, 'not on a branch (detached HEAD?) — nothing to check a PR for');
   logDiag(
@@ -1217,9 +1242,9 @@ export async function runAdoPrAssertion(
               artifactEvidence.push(`Build logs ZIP: ${artifact.archivePath}`);
             if (artifact.error)
               artifactEvidence.push(`Build log artifact error: ${artifact.error}`);
-          } catch (err: any) {
+          } catch (err: unknown) {
             if (err instanceof GateAborted) throw err;
-            artifactEvidence.push(`Build log artifact error: ${err?.message ?? String(err)}`);
+            artifactEvidence.push(`Build log artifact error: ${describeSdkError(err)}`);
           }
         }
 
@@ -1238,9 +1263,9 @@ export async function runAdoPrAssertion(
       if (opts.isAborted?.()) throw new GateAborted();
       await sleep(intervalMs);
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof GateAborted) throw err;
-    return fail(a.name, err?.message ?? String(err));
+    return fail(a.name, describeSdkError(err));
   }
 }
 
@@ -1274,7 +1299,13 @@ function unwrapSdk<T>(res: unknown): T {
     const r = res as { data?: T; error?: unknown };
     if (r.error != null) {
       const e = r.error;
-      throw new Error(typeof e === 'string' ? e : ((e as any)?.message ?? JSON.stringify(e)));
+      throw new Error(
+        typeof e === 'string'
+          ? e
+          : e && typeof e === 'object' && 'message' in e
+            ? String(e.message)
+            : JSON.stringify(e)
+      );
     }
     return r.data as T;
   }
@@ -1282,11 +1313,13 @@ function unwrapSdk<T>(res: unknown): T {
 }
 
 function reviewerText(res: unknown): string {
-  const parts = (res as any)?.parts;
+  const parts = (res as { parts?: unknown })?.parts;
   if (!Array.isArray(parts)) return '';
   return parts
-    .filter((p: any) => p?.type === 'text')
-    .map((p: any) => String(p.text ?? ''))
+    .filter((p: unknown): p is { type: 'text'; text?: unknown } => {
+      return !!p && typeof p === 'object' && (p as { type?: unknown }).type === 'text';
+    })
+    .map((p) => String(p.text ?? ''))
     .join('\n');
 }
 
@@ -1416,12 +1449,12 @@ export async function evaluateAssertions(
       } else {
         result = await runReviewAssertion(a, projectRoot, client, isAborted);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof GateAborted) {
         logDiag(`assertion "${a.name}" aborted mid-run`);
         return null;
       }
-      result = fail(a.name, `gate could not run this assertion: ${err?.message ?? String(err)}`);
+      result = fail(a.name, `gate could not run this assertion: ${describeSdkError(err)}`);
     }
     results.push(result);
     if (!result.passed) {
@@ -1455,7 +1488,7 @@ function injectFailureText(
   ].join('\n');
 }
 
-async function runGateTurnEnd(client: any, state: GateSessionState): Promise<void> {
+async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Promise<void> {
   const isAborted = (): boolean =>
     state.deleted || !state.gateEnabled || process.env.OPENCODE_GATE_DISABLED === '1';
   if (state.lastOutcome === 'pass') {
@@ -1519,7 +1552,7 @@ async function runGateTurnEnd(client: any, state: GateSessionState): Promise<voi
           ],
         },
       })
-      .catch((err: any) => logDiag(`success prompt error: ${err?.message ?? err}`));
+      .catch((err: unknown) => logDiag(`success prompt error: ${describeSdkError(err)}`));
     return;
   }
 
@@ -1535,7 +1568,7 @@ async function runGateTurnEnd(client: any, state: GateSessionState): Promise<voi
         .showToast({
           body: {
             variant: 'error',
-            message: `→ Completion gate "${last.name}" still failing after ${cap.value} retries — manual attention needed`,
+            message: `â†’ Completion gate "${last.name}" still failing after ${cap.value} retries — manual attention needed`,
             duration: 15000,
           },
         })
@@ -1556,7 +1589,7 @@ async function runGateTurnEnd(client: any, state: GateSessionState): Promise<voi
       path: { id: state.sessionID },
       body: { parts: [{ type: 'text', text: injectFailureText(state, last, cap.value) }] },
     })
-    .catch((err: any) => logDiag(`retry prompt error: ${err?.message ?? err}`));
+    .catch((err: unknown) => logDiag(`retry prompt error: ${describeSdkError(err)}`));
 }
 
 const plugin: Plugin = async ({ client }) => {
@@ -1564,9 +1597,11 @@ const plugin: Plugin = async ({ client }) => {
     event: async ({ event }) => {
       try {
         if (event.type === 'session.deleted') {
-          const info: any = (event.properties as any)?.info;
-          if (typeof info?.id === 'string' && info.id.trim() !== '') {
-            const sessionID = info.id;
+          const info = (event.properties as { info?: unknown } | undefined)?.info;
+          const deletedInfo =
+            info && typeof info === 'object' ? (info as { id?: unknown }) : undefined;
+          if (typeof deletedInfo?.id === 'string' && deletedInfo.id.trim() !== '') {
+            const sessionID = deletedInfo.id;
             deletedSessionIDs.add(sessionID);
             advanceSessionGeneration(sessionID);
             const state = sessions.get(sessionID);
@@ -1579,7 +1614,7 @@ const plugin: Plugin = async ({ client }) => {
           return;
         }
         if (event.type === 'session.created') {
-          const info: any = (event.properties as any).info;
+          const info = (event.properties as { info?: unknown }).info;
           const validated = validateTopLevelSessionMetadata(info);
           if (!validated) {
             logDiag('session.created ignored: invalid top-level session metadata');
@@ -1625,7 +1660,11 @@ const plugin: Plugin = async ({ client }) => {
           }
         }
         if (event.type === 'session.status') {
-          const props: any = event.properties as any;
+          const props = event.properties as {
+            sessionID?: unknown;
+            status?: { type?: unknown };
+          };
+          if (typeof props.sessionID !== 'string') return;
           const state = sessions.get(props.sessionID);
           if (!state || !state.gateEnabled || state.busy) return;
           if (props.status?.type !== 'idle') return;
@@ -1651,8 +1690,8 @@ const plugin: Plugin = async ({ client }) => {
         applied = await applyToggle(client, state, commandArguments);
         // Forward-compatible: anomalyco/opencode#46579 adds output.noReply to
         // skip the agent turn. Unreleased in 1.18.x — ignored until then.
-        (output as any).noReply = true;
-        clearParts(output);
+        (output as unknown as HookOutput).noReply = true;
+        clearParts(output as unknown as HookOutput);
         if (applied.kind === 'enabled') {
           await warnIfNothingToRun(client, state);
           kickGateTurnEnd(client, state, 'enabled via /gate');
@@ -1673,7 +1712,7 @@ const plugin: Plugin = async ({ client }) => {
         const state = sessions.get(sessionID);
         if (!state || state.deleted) return;
         if (!Array.isArray(output?.parts) || output.parts.length === 0) return; // already cleared (toast-only) — nothing to do
-        const textPart = output.parts.find((p: any) => p?.type === 'text') as any;
+        const textPart = output.parts.find((p) => p?.type === 'text');
         if (!textPart) return;
         const text: string = textPart?.text ?? '';
 
@@ -1691,7 +1730,7 @@ const plugin: Plugin = async ({ client }) => {
         }
 
         if (!text.trimStart().startsWith(MARKER)) {
-          // genuine user message → reset the fix-cycle budget
+          // genuine user message â†’ reset the fix-cycle budget
           state.retries = 0;
           state.escalated = false;
           state.lastOutcome = null;
