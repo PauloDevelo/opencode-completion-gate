@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.1.1...v1.2.0) (2026-09-06)
+
+
+### Features
+
+* add completion-gate command creator skill ([#6](https://github.com/PauloDevelo/opencode-completion-gate/issues/6)) ([843c9ec](https://github.com/PauloDevelo/opencode-completion-gate/commit/843c9ec80498bb233631ea241bee976e5573d7d9))
+
 ## [1.1.1](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.1.0...v1.1.1) (2026-09-06)
 
 
