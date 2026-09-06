@@ -28,54 +28,6 @@ import type {
   ReviewSessionClient,
 } from './types.js';
 
-export {
-  buildShellInvocation,
-  execFileOut,
-  execShell,
-  quoteWin,
-  runCommand,
-  truncateTail,
-} from './process.js';
-export {
-  findGateConfigPath,
-  loadGateConfig,
-  parseOnlyCommand,
-  effectiveMaxRetries,
-} from './config.js';
-export {
-  defaultBuildLogArtifact,
-  downloadBuildLogs,
-  extractTerminalBuildFailures,
-  isHumanReviewPolicy,
-  pickActivePr,
-  pickActivePrDetails,
-  requiredPoliciesGreen,
-  runAdoPrAssertion,
-} from './ado-pr.js';
-export { parseVerdict, runReviewAssertion } from './review.js';
-export type {
-  AdoPrAssertion,
-  AdoPrPollOptions,
-  AssertionOutcome,
-  BuildLogArtifact,
-  BuildLogArtifactRunner,
-  BuildLogDownloadOptions,
-  BuildLogExtractor,
-  CommandAssertion,
-  GateAssertion,
-  GateConfig,
-  PolicyEvaluationMinimal,
-  ProcessOutcome,
-  ReviewAssertion,
-  ReviewSessionClient,
-  ShellFn,
-  ShellInvocation,
-  TerminalBuildFailure,
-} from './types.js';
-export type { PickPrDetailsResult, PickPrResult } from './ado-pr.js';
-
-export type { GateMode } from './config.js';
-
 // ---------------------------------------------------------------------------
 // Plugin state + hooks
 // ---------------------------------------------------------------------------
