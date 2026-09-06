@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.0.0...v1.1.0) (2026-09-06)
+
+
+### Features
+
+* per-command max retries for /gate --only ([addc6ad](https://github.com/PauloDevelo/opencode-completion-gate/commit/addc6ad97f2ed154d448119ff63049683dd89b5c))
+
+
+### Bug Fixes
+
+* add AGENTS.md + /gate command ([0bfe0b7](https://github.com/PauloDevelo/opencode-completion-gate/commit/0bfe0b7bd1aadcc492524ee82940ff0cb4395e0f))
+* normalize repository URL per npm pkg fix ([b3bef58](https://github.com/PauloDevelo/opencode-completion-gate/commit/b3bef58bf69672ff2070d1c07c447b7914a73b48))
+
 ## 1.0.0 (2026-09-06)
 
 
