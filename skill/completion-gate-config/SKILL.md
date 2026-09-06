@@ -62,6 +62,8 @@ The gate is **off by default per session** — the user enables it with `/gate`.
 
 Non-positive or non-numeric values for the numeric fields silently fall back to the defaults.
 
+> Session note: `/gate --only "<command>" --retries N` overrides the file's `maxRetries` for that session's command-only run (falls back to the config value when omitted). This skill covers the file schema only — the override lives in the plugin session state, not in this JSON.
+
 ## Assertion Types
 
 Assertions run **sequentially**; the first failure short-circuits the rest so the evidence stays focused.

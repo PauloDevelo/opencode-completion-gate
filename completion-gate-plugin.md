@@ -29,25 +29,32 @@ Typical workflow:
 /gate off      # disable for this session
 /gate "python scripts/assert_task_done.py"  # run a custom command before configured assertions
 /gate --only "python scripts/assert_task_done.py"  # run only this command; skip configured assertions
+/gate --only "python scripts/assert_task_done.py" --retries 5  # same, but allow 5 auto-fix retries instead of the config's maxRetries
 ```
 
 Orchestration launchers arm command-only mode out-of-band with the
 `OPENCODE_GATE_BOOTSTRAP_COMMAND_B64` (preferred) or
 `OPENCODE_GATE_BOOTSTRAP_COMMAND` env var plus `OPENCODE_GATE_BOOTSTRAP_MODE`
-(`command-only` default, `combined` to also run project assertions). The plugin
-consumes them one-shot on `session.created`, enables the gate, and confirms
-with a toast carrying the command (`Completion gate armed (<mode>): <command>`)
-— nothing enters the chat transcript. The legacy
+(`command-only` default, `combined` to also run project assertions) and the
+optional `OPENCODE_GATE_BOOTSTRAP_MAX_RETRIES` (positive integer; honored only
+in `command-only` mode as the session retry override, ignored otherwise).
+The plugin consumes them one-shot on `session.created`, enables the gate, and
+confirms with a toast carrying the command
+(`Completion gate armed (<mode>): <command>`, with a `· maxRetries=N` suffix
+when a session override applies) — nothing enters the chat transcript. The legacy
 `[completion-gate-internal] --only <command>` first-line chat directive remains
 supported as a fallback (stripped from the model payload before delivery;
 only the `--only` variant is handled — a bare internal marker without `--only`
-is ignored); users should continue to use `/gate` or `/gate --only` interactively.
+is ignored — and it accepts the same trailing/leading `--retries N` flag);
+users should continue to use `/gate` or `/gate --only` interactively.
 
 The state is **in-memory per session** — no gate state is persisted. After the OpenCode server restarts, a session starts disabled, so invoke `/gate` again to enable it. A custom command set with `/gate "command"` is also session-only and uses a default timeout of **300 seconds**.
 
 When a custom command is configured, `/gate "command"` runs it **first** at every gate evaluation, before the project's configured assertions. `/gate --only "command"` switches to command-only mode: it runs the supplied command and skips the project's configured assertions. Both forms replace the previously stored custom command. As with all gate evaluations, a consecutive passing streak skips repeated evaluations until a genuine user message starts a new cycle.
 
-`/gate`, `/gate on`, and `/gate off` preserve the stored custom command and the selected mode while enabling or disabling the gate. `/gate "command"` selects combined mode; `/gate --only "command"` selects command-only mode. `/gate --only` without a command is invalid: it returns usage and leaves the enabled state, stored command, mode, retry count, and outcome unchanged. `/gate status` reports whether a custom command is configured and which mode is selected, but never prints the command contents.
+Per-command retry cap: `/gate --only "command" --retries N` (alias `--max-retries N`; leading form `/gate --only --retries N "command"` also works) overrides the retry cap for that session only — the `(RETRY n/max)` counter, escalation toast, and `runGateTurnEnd` cap all use `N` instead of the config file's `maxRetries`. Without the flag the command-only run falls back to the config value (or the default 3 when there is no config). Re-arming `--only` without the flag clears the override; `/gate`, `/gate on`, `/gate off`, and genuine user messages preserve it (messages only reset the fix-cycle counters). `N` must be a positive integer; a missing or invalid value returns usage and leaves the stored command, mode, retry count, and outcome unchanged. The flag is only recognized as a leading or trailing token — a `--retries` sequence in the middle of the command stays part of the command, and combined mode (`/gate "command"`) never strips it. `/gate status` reports the effective cap as `maxRetries=<n> (session|config)`.
+
+`/gate`, `/gate on`, and `/gate off` preserve the stored custom command, the selected mode, and the session retry override while enabling or disabling the gate. `/gate "command"` selects combined mode; `/gate --only "command"` selects command-only mode. `/gate --only` without a command (or with a missing/invalid `--retries` value) is invalid: it returns usage (`Usage: /gate --only "command" [--retries N]`) and leaves the enabled state, stored command, mode, retry count, and outcome unchanged. `/gate status` reports whether a custom command is configured, which mode is selected, and the effective retry cap (`maxRetries=<n> (session|config)`), but never prints the command contents.
 
 `off` also takes effect **immediately**: an in-flight gate evaluation stops at the next checkpoint (before each assertion, between `ado-pr` poll rounds) and stays silent — no further retry injection, success notice, or escalation toast. A child process that already started (e.g. a running build) finishes first; the abort lands right after it.
 

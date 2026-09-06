@@ -222,7 +222,7 @@ describe('/gate toggle via chat.message', () => {
     const invalid = await runGateSlash(hooks, 's1', '--only', '[completion-gate] --only');
     expect(invalid.parts).toHaveLength(0);
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
-      body: { variant: 'error', message: 'Usage: /gate --only "command"' },
+      body: { variant: 'error', message: 'Usage: /gate --only "command" [--retries N]' },
     });
 
     const status = await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');

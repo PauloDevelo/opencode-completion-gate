@@ -287,9 +287,20 @@ const INTERNAL_MARKER = '[completion-gate-internal]';
 const BOOTSTRAP_COMMAND_ENV = 'OPENCODE_GATE_BOOTSTRAP_COMMAND';
 const BOOTSTRAP_COMMAND_B64_ENV = 'OPENCODE_GATE_BOOTSTRAP_COMMAND_B64';
 const BOOTSTRAP_MODE_ENV = 'OPENCODE_GATE_BOOTSTRAP_MODE';
+const BOOTSTRAP_MAX_RETRIES_ENV = 'OPENCODE_GATE_BOOTSTRAP_MAX_RETRIES';
+
+/** Parses a positive-integer token with config-file semantics (floor, > 0). */
+function parsePositiveIntToken(tok: string): number | null {
+  const n = Number(tok);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
 
 /** Reads a pending out-of-band gate bootstrap command, if the launcher set one. */
-function readBootstrapGateCommand(): { command: string; mode: GateMode } | null {
+function readBootstrapGateCommand(): {
+  command: string;
+  mode: GateMode;
+  maxRetries?: number;
+} | null {
   const b64 = process.env[BOOTSTRAP_COMMAND_B64_ENV];
   const plain = process.env[BOOTSTRAP_COMMAND_ENV];
   let command = '';
@@ -313,7 +324,16 @@ function readBootstrapGateCommand(): { command: string; mode: GateMode } | null 
     process.env[BOOTSTRAP_MODE_ENV]?.trim().toLowerCase() === 'combined'
       ? 'combined'
       : 'command-only';
-  return { command, mode };
+  // Session retry override — command-only only; invalid/missing falls back.
+  let maxRetries: number | undefined;
+  if (mode === 'command-only') {
+    const raw = process.env[BOOTSTRAP_MAX_RETRIES_ENV];
+    if (typeof raw === 'string' && raw.trim() !== '') {
+      const parsed = parsePositiveIntToken(raw.trim());
+      if (parsed !== null) maxRetries = parsed;
+    }
+  }
+  return maxRetries !== undefined ? { command, mode, maxRetries } : { command, mode };
 }
 
 /** One-shot consumption: later sessions in the same process must not re-arm. */
@@ -321,6 +341,7 @@ function consumeBootstrapGateCommand(): void {
   delete process.env[BOOTSTRAP_COMMAND_B64_ENV];
   delete process.env[BOOTSTRAP_COMMAND_ENV];
   delete process.env[BOOTSTRAP_MODE_ENV];
+  delete process.env[BOOTSTRAP_MAX_RETRIES_ENV];
 }
 const TOGGLE_RE = /^\[completion-gate\](?:\s+(.*?))?\s*$/i;
 const INJECTED_FAILURE_RE =
@@ -335,11 +356,72 @@ interface GateSessionState {
   gateEnabled: boolean;
   extraCommand?: string;
   gateMode: GateMode;
+  /** Per-session retry cap for command-only mode (`/gate --only ... --retries N`).
+   *  Null/absent = fall back to the project config (or the default 3). */
+  sessionMaxRetries: number | null;
   retries: number;
   lastOutcome: 'pass' | 'fail' | null;
   escalated: boolean;
   busy: boolean;
   deleted: boolean;
+}
+
+/**
+ * Splits a `--only` remainder into the session command plus an optional
+ * `--retries N` (alias `--max-retries N`) override. The flag is recognized
+ * only as a leading or trailing token sequence so a command that merely
+ * mentions `--retries` mid-line stays untouched; when both ends carry the
+ * flag the leading value wins.
+ */
+export function parseOnlyCommand(remainder: string): {
+  command: string;
+  maxRetries?: number;
+  invalidRetry: boolean;
+} {
+  if (!/^\s/.test(remainder)) return { command: '', invalidRetry: false };
+  let body = remainder.trim();
+  let leading: number | null = null;
+  let trailing: number | null = null;
+  let invalid = false;
+
+  const leadingMatch = /^--(?:retries|max-retries)\s+(\S+)\s*/i.exec(body);
+  if (leadingMatch) {
+    const parsed = parsePositiveIntToken(leadingMatch[1]);
+    if (parsed === null) invalid = true;
+    else leading = parsed;
+    body = body.slice(leadingMatch[0].length).trim();
+  } else if (/^--(?:retries|max-retries)(\s|$)/i.test(body)) {
+    invalid = true;
+  }
+
+  const trailingMatch = /\s+--(?:retries|max-retries)\s+(\S+)\s*$/i.exec(body);
+  if (trailingMatch) {
+    const parsed = parsePositiveIntToken(trailingMatch[1]);
+    if (parsed === null) invalid = true;
+    else trailing = parsed;
+    body = body.slice(0, trailingMatch.index).trim();
+  } else if (/\s+--(?:retries|max-retries)\s*$/i.test(body)) {
+    invalid = true;
+  }
+
+  const maxRetries = leading ?? trailing ?? undefined;
+  return {
+    command: body,
+    ...(maxRetries !== undefined ? { maxRetries } : {}),
+    invalidRetry: invalid,
+  };
+}
+
+/** Effective retry cap for a session: session override wins in command-only
+ *  mode, otherwise the project config (or the default 3). */
+export function effectiveMaxRetries(
+  state: Pick<GateSessionState, 'gateMode' | 'sessionMaxRetries'>,
+  configMaxRetries: number
+): { value: number; source: 'session' | 'config' } {
+  if (state.gateMode === 'command-only' && state.sessionMaxRetries !== null) {
+    return { value: state.sessionMaxRetries, source: 'session' };
+  }
+  return { value: configMaxRetries, source: 'config' };
 }
 
 const sessions = new Map<string, GateSessionState>();
@@ -390,6 +472,7 @@ function createGateSessionState(sessionID: string, directory: string): GateSessi
     directory,
     gateEnabled: false,
     gateMode: 'combined',
+    sessionMaxRetries: null,
     retries: 0,
     lastOutcome: null,
     escalated: false,
@@ -480,7 +563,12 @@ async function applyToggle(
   const arg = normalized || 'on';
 
   if (arg === 'status') {
-    const notice = `Completion gate: ${state.gateEnabled ? 'ENABLED' : 'disabled'} · retries=${state.retries} · lastOutcome=${state.lastOutcome ?? 'n/a'} · extraCommand=${state.extraCommand ? 'configured' : 'none'} · mode=${state.gateMode}`;
+    const loaded = loadGateConfig(state.directory);
+    const cap =
+      state.gateMode === 'command-only' && state.sessionMaxRetries !== null
+        ? { value: state.sessionMaxRetries, source: 'session' as const }
+        : { value: loaded?.config.maxRetries ?? 3, source: 'config' as const };
+    const notice = `Completion gate: ${state.gateEnabled ? 'ENABLED' : 'disabled'} · retries=${state.retries} · lastOutcome=${state.lastOutcome ?? 'n/a'} · extraCommand=${state.extraCommand ? 'configured' : 'none'} · mode=${state.gateMode} · maxRetries=${cap.value} (${cap.source})`;
     await safeToast(client, notice);
     return { notice, kind: 'status' };
   }
@@ -488,21 +576,28 @@ async function applyToggle(
   if (/^--only/i.test(rawArgument.trim())) {
     const onlyMatch = /^--only(.*)$/i.exec(rawArgument.trim());
     const remainder = onlyMatch?.[1] ?? '';
-    const command = /^\s/.test(remainder) ? remainder.trim() : '';
-    if (!command) {
-      const notice = 'Usage: /gate --only "command"';
+    const parsed = parseOnlyCommand(remainder);
+    if (!parsed.command || parsed.invalidRetry) {
+      const notice = 'Usage: /gate --only "command" [--retries N]';
       await safeToast(client, notice, 'error');
       return { notice, kind: 'usage' };
     }
-    state.extraCommand = command;
+    state.extraCommand = parsed.command;
     state.gateMode = 'command-only';
+    state.sessionMaxRetries = parsed.maxRetries ?? null;
     state.gateEnabled = true;
     state.retries = 0;
     state.escalated = false;
     state.lastOutcome = null;
-    const notice = `Completion gate armed (command-only): ${command}`;
+    const notice =
+      parsed.maxRetries !== undefined
+        ? `Completion gate armed (command-only): ${parsed.command} · maxRetries=${parsed.maxRetries}`
+        : `Completion gate armed (command-only): ${parsed.command}`;
     await safeToast(client, notice);
-    logDiag(`gate command-only custom command registered on ${state.sessionID}`);
+    logDiag(
+      `gate command-only custom command registered on ${state.sessionID}` +
+        (parsed.maxRetries !== undefined ? ` (session maxRetries=${parsed.maxRetries})` : '')
+    );
     return { notice, kind: 'enabled' };
   }
 
@@ -1379,6 +1474,7 @@ async function runGateTurnEnd(client: any, state: GateSessionState): Promise<voi
   }
   const projectRoot = loaded?.projectRoot ?? state.directory;
   const config = loaded?.config ?? { maxRetries: 3, assertions: [] };
+  const cap = effectiveMaxRetries(state, config.maxRetries);
   const sessionAssertion: CommandAssertion = {
     type: 'command',
     name: 'session-command',
@@ -1391,7 +1487,7 @@ async function runGateTurnEnd(client: any, state: GateSessionState): Promise<voi
       : [sessionAssertion, ...config.assertions]
     : config.assertions;
   logDiag(
-    `gate turn-end on ${state.sessionID}: ${loaded ? `config ${loaded.path}` : 'command-only without project config'} (${assertions.length} assertion(s), maxRetries=${config.maxRetries}, retries so far=${state.retries})`
+    `gate turn-end on ${state.sessionID}: ${loaded ? `config ${loaded.path}` : 'command-only without project config'} (${assertions.length} assertion(s), maxRetries=${cap.value} (${cap.source}), retries so far=${state.retries})`
   );
 
   const results = await evaluateAssertions(assertions, projectRoot, client, isAborted);
@@ -1432,20 +1528,20 @@ async function runGateTurnEnd(client: any, state: GateSessionState): Promise<voi
     return;
   }
   state.lastOutcome = 'fail';
-  if (state.retries >= config.maxRetries) {
+  if (state.retries >= cap.value) {
     if (!state.escalated) {
       state.escalated = true;
       await client.tui
         .showToast({
           body: {
             variant: 'error',
-            message: `→ Completion gate "${last.name}" still failing after ${config.maxRetries} retries — manual attention needed`,
+            message: `→ Completion gate "${last.name}" still failing after ${cap.value} retries — manual attention needed`,
             duration: 15000,
           },
         })
         .catch(() => {});
       logDiag(
-        `gate ESCALATED on ${state.sessionID}: "${last.name}" still failing after ${config.maxRetries} retries — manual attention needed`
+        `gate ESCALATED on ${state.sessionID}: "${last.name}" still failing after ${cap.value} retries — manual attention needed`
       );
     }
     return;
@@ -1453,12 +1549,12 @@ async function runGateTurnEnd(client: any, state: GateSessionState): Promise<voi
 
   state.retries += 1;
   logDiag(
-    `gate FAILED on ${state.sessionID}: "${last.name}" — retry ${state.retries}/${config.maxRetries}, injecting fix request`
+    `gate FAILED on ${state.sessionID}: "${last.name}" — retry ${state.retries}/${cap.value}, injecting fix request`
   );
   await client.session
     .promptAsync({
       path: { id: state.sessionID },
-      body: { parts: [{ type: 'text', text: injectFailureText(state, last, config.maxRetries) }] },
+      body: { parts: [{ type: 'text', text: injectFailureText(state, last, cap.value) }] },
     })
     .catch((err: any) => logDiag(`retry prompt error: ${err?.message ?? err}`));
 }
@@ -1501,18 +1597,28 @@ const plugin: Plugin = async ({ client }) => {
             consumeBootstrapGateCommand();
             created.extraCommand = bootstrap.command;
             created.gateMode = bootstrap.mode;
+            created.sessionMaxRetries =
+              bootstrap.mode === 'command-only' && bootstrap.maxRetries !== undefined
+                ? bootstrap.maxRetries
+                : null;
             created.gateEnabled = true;
             created.retries = 0;
             created.escalated = false;
             created.lastOutcome = null;
             logDiag(
-              `gate bootstrap ${bootstrap.mode} custom command registered on ${created.sessionID}`
+              `gate bootstrap ${bootstrap.mode} custom command registered on ${created.sessionID}` +
+                (created.sessionMaxRetries !== null
+                  ? ` (session maxRetries=${created.sessionMaxRetries})`
+                  : '')
             );
             await client.tui
               .showToast({
                 body: {
                   variant: 'info',
-                  message: `Completion gate armed (${bootstrap.mode}): ${bootstrap.command}`,
+                  message:
+                    created.sessionMaxRetries !== null
+                      ? `Completion gate armed (${bootstrap.mode}): ${bootstrap.command} · maxRetries=${created.sessionMaxRetries}`
+                      : `Completion gate armed (${bootstrap.mode}): ${bootstrap.command}`,
                 },
               })
               .catch(() => {});

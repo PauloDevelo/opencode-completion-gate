@@ -34,8 +34,9 @@ Add the plugin to your OpenCode configuration:
 
 ```
 /gate          # enable (same as /gate on)
-/gate status   # e.g. "Completion gate: ENABLED · retries=1 · lastOutcome=fail · extraCommand=none · mode=combined"
+/gate status   # e.g. "Completion gate: ENABLED · retries=1 · lastOutcome=fail · extraCommand=none · mode=combined · maxRetries=3 (config)"
 /gate off      # disable for this session
+/gate --only "npm run test-ci" --retries 5  # run only this command with its own retry cap
 ```
 
 ## Configuration
