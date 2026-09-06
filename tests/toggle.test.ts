@@ -1,3 +1,4 @@
+import type { TestClient, TestHooks, TestOutput, TestPlugin } from './helpers.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -16,24 +17,24 @@ function makeFakeClient() {
       promptAsync: vi.fn(async () => ({ info: {}, parts: [] })),
     },
     tui: { showToast: vi.fn(async () => {}) },
-  } as any;
+  } as TestClient;
 }
 
-async function freshHooks(client: any) {
+async function freshHooks(client: TestClient) {
   vi.resetModules();
   const mod = await import('../src/core.js');
-  const hooks = await (mod.default as any)({ client });
+  const hooks = await (mod.default as TestPlugin)({ client });
   return hooks;
 }
 
 describe('/gate toggle via chat.message', () => {
-  let client: any;
+  let client: TestClient;
 
   beforeEach(() => {
     client = makeFakeClient();
   });
 
-  async function registeredSession(hooks: any, id = 's1', directory = 'D:/nowhere') {
+  async function registeredSession(hooks: TestHooks, id = 's1', directory = 'D:/nowhere') {
     await hooks.event({
       event: {
         type: 'session.created',
@@ -43,13 +44,13 @@ describe('/gate toggle via chat.message', () => {
   }
 
   function partsWith(text: string) {
-    return { parts: [{ type: 'text', text }] } as any;
+    return { parts: [{ type: 'text', text }] } as TestOutput;
   }
 
   // Slash /gate is fully handled by the plugin: it arms/reports, shows a
   // toast, then throws a sentinel to abort the command flow so the model
   // stays idle (no LLM turn). The rejection IS the expected outcome.
-  async function runGateSlash(hooks: any, sessionID: string, args: string, text: string) {
+  async function runGateSlash(hooks: TestHooks, sessionID: string, args: string, text: string) {
     const out = partsWith(text);
     await expect(
       hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out)
@@ -57,7 +58,7 @@ describe('/gate toggle via chat.message', () => {
     return out;
   }
 
-  function expectAnchor(out: any, snippet: string) {
+  function expectAnchor(out: TestOutput, snippet: string) {
     expect(out.parts).toHaveLength(1);
     expect(out.parts[0].text).toContain(snippet);
     expect(out.parts[0].text).toContain('acknowledge briefly');
@@ -133,7 +134,7 @@ describe('/gate toggle via chat.message', () => {
 
     const out = await runGateSlash(hooks, 's1', '', '[completion-gate]');
     expect(out.parts).toHaveLength(0);
-    expect((out as any).noReply).toBe(true);
+    expect(out.noReply).toBe(true);
     expect(client.tui.showToast).toHaveBeenCalledWith({
       body: { variant: 'info', message: 'Completion gate enabled for this session.' },
     });
@@ -325,7 +326,7 @@ describe('/gate toggle via chat.message', () => {
     expect(readFileSync(markerA, 'utf8')).toBe('A');
     await hooks['chat.message']({ sessionID: 's1' }, {
       parts: [{ type: 'text', text: 'please proceed' }],
-    } as any);
+    } as TestOutput);
     await hooks.event({
       event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
     });

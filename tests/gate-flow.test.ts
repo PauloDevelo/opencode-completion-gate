@@ -1,10 +1,12 @@
+import type { GateAssertion } from '../src/core.js';
+import type { TestClient, TestHooks, TestOutput, TestPlugin } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makeTempProject } from './helpers.js';
 
-function cfg(assertions: unknown[], extra: Record<string, unknown> = {}): string {
+function cfg(assertions: GateAssertion[], extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ enabled: true, maxRetries: 3, assertions, ...extra });
 }
 
@@ -15,7 +17,7 @@ function makeFakeClient() {
       promptAsync: vi.fn(async () => ({ info: {}, parts: [] })),
     },
     tui: { showToast: vi.fn(async () => {}) },
-  } as any;
+  } as TestClient;
 }
 
 async function setup(files: Record<string, string>) {
@@ -23,7 +25,9 @@ async function setup(files: Record<string, string>) {
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
   const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as any)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   await hooks.event({
     event: {
       type: 'session.created',
@@ -32,14 +36,14 @@ async function setup(files: Record<string, string>) {
   });
   await hooks['chat.message']({ sessionID: 's1' }, {
     parts: [{ type: 'text', text: '[completion-gate]' }],
-  } as any);
+  } as TestOutput);
   return { dir, client, hooks, mod };
 }
 
 // Slash /gate aborts the command flow with a sentinel rejection (no LLM
 // turn) AFTER arming the gate — helpers swallow it and keep going.
-async function runGateSlash(hooks: any, sessionID: string, args: string, text: string) {
-  const out = { parts: [{ type: 'text', text }] } as any;
+async function runGateSlash(hooks: TestHooks, sessionID: string, args: string, text: string) {
+  const out = { parts: [{ type: 'text', text }] } as TestOutput;
   await hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out).catch(
     () => {}
   );
@@ -51,7 +55,9 @@ async function setupWithSlashCommand(files: Record<string, string>) {
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
   const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as any)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   await hooks.event({
     event: {
       type: 'session.created',
@@ -67,7 +73,9 @@ async function setupCommandOnly(files: Record<string, string>) {
   const dir = makeTempProject(files);
   const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as any)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   await hooks.event({
     event: {
       type: 'session.created',
@@ -86,12 +94,14 @@ async function setupResumedWithSlashCommand(files: Record<string, string>) {
     data: { id: 'resumed', directory: dir, parentID: undefined },
     error: undefined,
   });
-  const hooks = await (mod.default as any)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   const out = await runGateSlash(hooks, 'resumed', '', '[completion-gate]');
   return { dir, client, hooks, mod, out };
 }
 
-async function fireIdle(hooks: any, sessionID = 's1') {
+async function fireIdle(hooks: TestHooks, sessionID = 's1') {
   await hooks.event({
     event: { type: 'session.status', properties: { sessionID, status: { type: 'idle' } } },
   });
@@ -294,13 +304,13 @@ describe('turn-end gate flow', () => {
     });
     const mod = await import('../src/core.js');
     const client = makeFakeClient();
-    let resolveLookup!: (value: unknown) => void;
+    let resolveLookup!: (value: TestHooks) => void;
     const lookup = new Promise<unknown>((resolve) => {
       resolveLookup = resolve;
     });
     client.session.get.mockReturnValue(lookup);
-    const hooks = await (mod.default as any)({ client });
-    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as any;
+    const hooks = await (mod.default as TestPlugin)({ client });
+    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     const commandPromise = hooks['command.execute.before'](
       { command: 'gate', sessionID: 'resumed-race', arguments: '' },
@@ -373,7 +383,7 @@ describe('turn-end gate flow', () => {
     expect(client.tui.showToast).not.toHaveBeenCalled();
 
     client.session.get.mockRejectedValue(new Error('session no longer exists'));
-    const out = { parts: [{ type: 'text', text: '[completion-gate] status' }] } as any;
+    const out = { parts: [{ type: 'text', text: '[completion-gate] status' }] } as TestOutput;
     await hooks['command.execute.before'](
       { command: 'gate', sessionID: 's1', arguments: 'status' },
       out
@@ -396,8 +406,8 @@ describe('turn-end gate flow', () => {
       data: { id: 'child', directory: dir, parentID: 'root' },
       error: undefined,
     });
-    const hooks = await (mod.default as any)({ client });
-    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as any;
+    const hooks = await (mod.default as TestPlugin)({ client });
+    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     await hooks['command.execute.before'](
       { command: 'gate', sessionID: 'child', arguments: '' },
@@ -429,8 +439,8 @@ describe('turn-end gate flow', () => {
       data: { id: 'malformed-parent', directory: dir, parentID },
       error: undefined,
     });
-    const hooks = await (mod.default as any)({ client });
-    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as any;
+    const hooks = await (mod.default as TestPlugin)({ client });
+    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     await hooks['command.execute.before'](
       { command: 'gate', sessionID: 'malformed-parent', arguments: '' },
@@ -515,7 +525,7 @@ describe('turn-end gate flow', () => {
     // a genuine user message restarts validation
     await hooks['chat.message']({ sessionID: 's1' }, {
       parts: [{ type: 'text', text: 'one more change please' }],
-    } as any);
+    } as TestOutput);
     await fireIdle(hooks);
     await new Promise((r) => setTimeout(r, 400));
     expect(readFileSync(marker, 'utf8')).toBe('xx');
@@ -583,7 +593,7 @@ describe('turn-end gate flow', () => {
 
     await hooks['chat.message']({ sessionID: 's1' }, {
       parts: [{ type: 'text', text: 'try a different approach' }],
-    } as any);
+    } as TestOutput);
 
     await fireIdle(hooks); // budget restored → injects again instead of staying escalated
     await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(2));
@@ -610,7 +620,7 @@ describe('turn-end gate flow', () => {
     await new Promise((r) => setTimeout(r, 150));
     await hooks['chat.message']({ sessionID: 's1' }, {
       parts: [{ type: 'text', text: '[completion-gate] off' }],
-    } as any);
+    } as TestOutput);
 
     // The command eventually fails — but the aborted run must stay silent.
     await new Promise((r) => setTimeout(r, 1200));

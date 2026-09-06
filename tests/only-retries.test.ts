@@ -1,3 +1,4 @@
+import type { TestClient, TestHooks, TestOutput, TestPlugin } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempProject } from './helpers.js';
 
@@ -13,25 +14,25 @@ function makeFakeClient() {
       promptAsync: vi.fn(async () => ({ info: {}, parts: [] })),
     },
     tui: { showToast: vi.fn(async () => {}) },
-  } as any;
+  } as TestClient;
 }
 
-async function freshHooks(client: any) {
+async function freshHooks(client: TestClient) {
   vi.resetModules();
   const mod = await import('../src/core.js');
-  const hooks = await (mod.default as any)({ client });
+  const hooks = await (mod.default as TestPlugin)({ client });
   return { hooks, mod };
 }
 
-async function runGateSlash(hooks: any, sessionID: string, args: string, text: string) {
-  const out = { parts: [{ type: 'text', text }] } as any;
+async function runGateSlash(hooks: TestHooks, sessionID: string, args: string, text: string) {
+  const out = { parts: [{ type: 'text', text }] } as TestOutput;
   await expect(
     hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out)
   ).rejects.toThrow();
   return out;
 }
 
-async function registerSession(hooks: any, id: string, directory: string) {
+async function registerSession(hooks: TestHooks, id: string, directory: string) {
   await hooks.event({
     event: {
       type: 'session.created',
@@ -40,7 +41,7 @@ async function registerSession(hooks: any, id: string, directory: string) {
   });
 }
 
-function lastToast(client: any): string {
+function lastToast(client: TestClient): string {
   return client.tui.showToast.mock.calls.at(-1)[0].body.message as string;
 }
 
@@ -304,7 +305,7 @@ describe('--only --retries override (RED)', () => {
           text: '[completion-gate-internal] --only node -e "process.exit(0)" --retries 3',
         },
       ],
-    } as any);
+    } as TestOutput);
     await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
     expect(lastToast(client)).toContain('maxRetries=3 (session)');
   });

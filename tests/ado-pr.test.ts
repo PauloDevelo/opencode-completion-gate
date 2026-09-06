@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+﻿import { describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -648,7 +648,7 @@ describe('real az output shapes (live-captured fixtures)', () => {
   });
 
   it('ignores the non-blocking Required reviewers policy present in the real payload', () => {
-    const evals: any[] = JSON.parse(fixture('pr-policy-real-red.json'));
+    const evals: unknown[] = JSON.parse(fixture('pr-policy-real-red.json'));
     const onlyNonBlocking = JSON.stringify(
       evals.filter((e) => e.configuration?.isBlocking !== true)
     );
