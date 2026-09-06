@@ -1,0 +1,81 @@
+{
+  "name": "opencode-completion-gate",
+  "version": "1.0.0",
+  "description": "OpenCode plugin: per-session quality gate that blocks declaring done until configured assertions pass",
+  "type": "module",
+  "main": "dist/plugin.js",
+  "types": "dist/plugin.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    },
+    "./utils": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "npm run build:bundle && npm run build:types",
+    "build:bundle": "esbuild src/plugin.ts --bundle --platform=node --format=esm --outfile=dist/plugin.js --external:fs --external:path --external:os --external:child_process --external:@opencode-ai/plugin && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:fs --external:path --external:os --external:child_process --external:@opencode-ai/plugin",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "clean": "rimraf dist coverage",
+    "prepublishOnly": "npm run clean && npm run lint && npm run build && npm run test"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "quality-gate",
+    "completion-gate",
+    "ci"
+  ],
+  "author": "PauloDevelo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PauloDevelo/opencode-completion-gate.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PauloDevelo/opencode-completion-gate/issues"
+  },
+  "homepage": "https://github.com/PauloDevelo/opencode-completion-gate#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@opencode-ai/plugin": "^1.0.223",
+    "@opencode-ai/sdk": "^1.0.223",
+    "@types/node": "^20.10.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "esbuild": "^0.27.2",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "prettier": "^3.4.2",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.3.0",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^1.0.0"
+  }
+}

@@ -1,0 +1,463 @@
+[
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": "2026-08-21T05:31:09.060331+00:00",
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:46.424486+00:00",
+      "id": 2764,
+      "isBlocking": true,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 192,
+      "settings": {
+        "buildDefinitionId": 514,
+        "displayName": "PR on Aquadavanced Energy - Back end",
+        "filenamePatterns": [
+          "/build/*",
+          "/Sources/*",
+          "/UnitTests/*",
+          "/Directory.Build.props",
+          "!/Tools/*",
+          "!/Sources/AquadvancedEnergy.Web/*",
+          "!/Sources/AquadvancedEnergy.UserMigrationTool",
+          "REDACTED-TOKEN*"
+        ],
+        "manualQueueOnly": false,
+        "queueOnSourceUpdateOnly": true,
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ],
+        "validDuration": 1440
+      },
+      "type": {
+        "displayName": "Build",
+        "id": "0609b952-1397-4640-95ec-e00a01b2c241"
+      }
+    },
+    "context": {
+      "buildAfterMerge": false,
+      "buildDefinitionId": 514,
+      "buildDefinitionName": "AquadvancedEnergy-BackEnd-CI",
+      "buildId": 383110,
+      "buildIsNotCurrent": false,
+      "buildOutputPreview": {
+        "errors": [
+          {
+            "lineNumber": 3307,
+            "message": "UnitTests\\AquadvancedEnergy.Core.Tests\\Execution\\Client\\Views\\Energy\\EnergyViewBuilderTest.cs(69,41): Error CS7036: There is no argument given that corresponds to the required parameter 'entityKey' of 'AquadaptEntityId.AquadaptEntityId(EntityType, long)'"
+          },
+          {
+            "lineNumber": 5876,
+            "message": "Error: The process 'D:\\AAEnergyBuildAgent\\_work\\_tool\\dotnet\\dotnet.exe' failed with exit code 1"
+          },
+          {
+            "lineNumber": 5879,
+            "message": "Dotnet command failed with non-zero exit code on the following projects : [ 'D:\\\\AAEnergyBuildAgent\\\\_work\\\\1\\\\s\\\\AquadvancedEnergyHost.sln' ]"
+          }
+        ],
+        "jobName": "backend_build",
+        "taskName": "Build solution AquadvancedEnergy"
+      },
+      "buildStartedUtc": "2026-08-21T05:08:13.0472496Z",
+      "isExpired": false,
+      "lastMergeCommitId": "REDACTED-TOKEN",
+      "lastMergeSourceCommitId": "REDACTED-TOKEN",
+      "lastMergeTargetCommitId": "REDACTED-TOKEN",
+      "wasAutoRequeued": false
+    },
+    "evaluationId": "c8638a6c-b2f7-4ae9-b475-0f247b25e3b4",
+    "startedDate": "2026-08-21T05:08:14.254985+00:00",
+    "status": "rejected"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": null,
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:37.862268+00:00",
+      "id": 2767,
+      "isBlocking": false,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 183,
+      "settings": {
+        "creatorVoteCounts": false,
+        "minimumApproverCount": 1,
+        "requiredReviewerIds": [
+          "b67d784d-8d14-4536-b1f1-5cdc7139dfb8"
+        ],
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ]
+      },
+      "type": {
+        "displayName": "Required reviewers",
+        "id": "fd2167ab-b0be-447a-8ec8-39368250530e"
+      }
+    },
+    "context": null,
+    "evaluationId": "2cf37bc7-a508-49bf-be94-e5101b55d1c5",
+    "startedDate": "2026-08-17T05:20:00.739571+00:00",
+    "status": "queued"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": null,
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:38.514368+00:00",
+      "id": 2768,
+      "isBlocking": false,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 179,
+      "settings": {
+        "creatorVoteCounts": true,
+        "minimumApproverCount": 1,
+        "requiredReviewerIds": [
+          "67afc47d-93a7-41b7-a062-9571d5c44562"
+        ],
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ]
+      },
+      "type": {
+        "displayName": "Required reviewers",
+        "id": "fd2167ab-b0be-447a-8ec8-39368250530e"
+      }
+    },
+    "context": null,
+    "evaluationId": "2883417a-250f-4256-aa4c-95c30bf7cd00",
+    "startedDate": "2026-08-17T05:20:00.739571+00:00",
+    "status": "queued"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": "2026-08-21T05:13:52.969553+00:00",
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:44.661104+00:00",
+      "id": 5336,
+      "isBlocking": true,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 110,
+      "settings": {
+        "buildDefinitionId": 1030,
+        "displayName": "PR on AquadvancedEnergy - UserMigrationTool",
+        "filenamePatterns": [
+          "/Sources/AquadvancedEnergy.Core.Aquadapt/*",
+          "/Sources/AquadvancedEnergy.Core.Common/*",
+          "/Sources/AquadvancedEnergy.UserMigrationTool/*",
+          "Directory.BuildProps"
+        ],
+        "manualQueueOnly": false,
+        "queueOnSourceUpdateOnly": true,
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ],
+        "validDuration": 720
+      },
+      "type": {
+        "displayName": "Build",
+        "id": "0609b952-1397-4640-95ec-e00a01b2c241"
+      }
+    },
+    "context": {
+      "buildAfterMerge": false,
+      "buildDefinitionId": 1030,
+      "buildDefinitionName": "AquadvancedEnergy-UserMigrationTool-CI",
+      "buildId": 383111,
+      "buildIsNotCurrent": false,
+      "buildOutputPreview": null,
+      "buildStartedUtc": "2026-08-21T05:08:14.2490877Z",
+      "isExpired": false,
+      "lastMergeCommitId": "REDACTED-TOKEN",
+      "lastMergeSourceCommitId": "REDACTED-TOKEN",
+      "lastMergeTargetCommitId": "REDACTED-TOKEN",
+      "wasAutoRequeued": false
+    },
+    "evaluationId": "4b33fbdc-2dee-4e42-8baa-dcca0cdbb732",
+    "startedDate": "2026-08-21T05:08:14.254985+00:00",
+    "status": "approved"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": "2026-08-21T05:30:09.105344+00:00",
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:39.412070+00:00",
+      "id": 5385,
+      "isBlocking": false,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 206,
+      "settings": {
+        "authorId": null,
+        "defaultDisplayName": null,
+        "invalidateOnSourceUpdate": false,
+        "policyApplicability": null,
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ],
+        "statusGenre": "SonarQube",
+        "statusName": "quality gate"
+      },
+      "type": {
+        "displayName": "Status",
+        "id": "cbdc66da-9728-4af8-aada-9a5a32e4a226"
+      }
+    },
+    "context": {
+      "latestStatusId": 42
+    },
+    "evaluationId": "fdd4c10f-5beb-4368-aeae-23d9098ecf3a",
+    "startedDate": "2026-08-17T06:47:13.306789+00:00",
+    "status": "rejected"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": null,
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:31:02.628652+00:00",
+      "id": 8675,
+      "isBlocking": true,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 3,
+      "settings": {
+        "allowNoFastForward": true,
+        "allowSquash": true,
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ]
+      },
+      "type": {
+        "displayName": "Require a merge strategy",
+        "id": "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab"
+      }
+    },
+    "context": null,
+    "evaluationId": "84825ad9-fda7-4a05-823e-7cf1d0055358",
+    "startedDate": "2026-08-17T05:20:00.739571+00:00",
+    "status": "approved"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": "2026-08-18T00:17:22.268159+00:00",
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:49.983259+00:00",
+      "id": 8676,
+      "isBlocking": true,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 1,
+      "settings": {
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ]
+      },
+      "type": {
+        "displayName": "Comment requirements",
+        "id": "c6a1889d-b943-4856-b76f-9e46bb6b0df2"
+      }
+    },
+    "context": null,
+    "evaluationId": "ca66f34a-1234-401f-9877-e205aea12335",
+    "startedDate": "2026-08-17T05:20:00.739571+00:00",
+    "status": "rejected"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": "2026-08-17T05:20:01.597441+00:00",
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:50.844829+00:00",
+      "id": 8677,
+      "isBlocking": true,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 1,
+      "settings": {
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ]
+      },
+      "type": {
+        "displayName": "Work item linking",
+        "id": "40e92b44-2fe1-4dd6-b3d8-74a9c21d0c6e"
+      }
+    },
+    "context": {
+      "linkedWorkItemIds": [
+        211984
+      ]
+    },
+    "evaluationId": "8f2cb655-c080-4478-9316-7a04ac0dec7b",
+    "startedDate": "2026-08-17T05:20:00.739571+00:00",
+    "status": "approved"
+  },
+  {
+    "artifactId": "vstfs:///CodeReview/CodeReviewId/ccc8fe01-d996-4085-8ae3-fb2d5ee0e3f4%2f60887",
+    "completedDate": null,
+    "configuration": {
+      "createdBy": {
+        "directoryAlias": null,
+        "displayName": "P. Author",
+        "id": "bb8f97a0-adf8-6a02-9e2e-7db92fef70ef",
+        "inactive": null,
+        "isAadIdentity": null,
+        "isContainer": null,
+        "isDeletedInOrigin": null,
+        "uniqueName": "user@example.com"
+      },
+      "createdDate": "2026-08-13T20:30:56.360044+00:00",
+      "id": 8678,
+      "isBlocking": true,
+      "isDeleted": false,
+      "isEnabled": true,
+      "isEnterpriseManaged": false,
+      "revision": 5,
+      "settings": {
+        "allowDownvotes": false,
+        "blockLastPusherVote": false,
+        "creatorVoteCounts": true,
+        "minimumApproverCount": 1,
+        "requireVoteOnEachIteration": false,
+        "requireVoteOnLastIteration": false,
+        "resetOnSourcePush": true,
+        "resetRejectionsOnSourcePush": true,
+        "scope": [
+          {
+            "matchKind": "Exact",
+            "refName": "refs/heads/develop",
+            "repositoryId": "563fb0d5-0a70-49bc-abb6-a661426ed188"
+          }
+        ]
+      },
+      "type": {
+        "displayName": "Minimum number of reviewers",
+        "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd"
+      }
+    },
+    "context": {},
+    "evaluationId": "55bdc63f-787c-4b43-977e-d21fcc34b263",
+    "startedDate": "2026-08-21T05:08:08.039080+00:00",
+    "status": "queued"
+  }
+]
