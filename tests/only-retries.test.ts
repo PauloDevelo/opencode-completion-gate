@@ -138,6 +138,26 @@ describe('--only --retries override (RED)', () => {
     expect(lastToast(client)).toContain('maxRetries=6 (session)');
   });
 
+  it('accepts equals-form retry flags and uses the override in retry text', async () => {
+    const client = makeFakeClient();
+    const dir = makeTempProject({});
+    const { hooks } = await freshHooks(client);
+    await registerSession(hooks, 's1', dir);
+
+    await runGateSlash(
+      hooks,
+      's1',
+      '--only node -e "process.exit(1)" --retries=5',
+      '[completion-gate] --only node -e "process.exit(1)" --retries=5'
+    );
+    client.session.promptAsync.mockClear();
+    await hooks.event({
+      event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+    });
+    await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
+    expect(client.session.promptAsync.mock.calls[0][0].body.parts[0].text).toContain('RETRY 1/5');
+  });
+
   it('rejects invalid retry values and preserves the previous command-only state', async () => {
     const client = makeFakeClient();
     const { hooks } = await freshHooks(client);
