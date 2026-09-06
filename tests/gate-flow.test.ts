@@ -1,10 +1,12 @@
-﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GateAssertion } from '../src/core.js';
+import type { TestClient, TestHooks, TestOutput, TestPlugin } from './helpers.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makeTempProject } from './helpers.js';
 
-function cfg(assertions: unknown[], extra: Record<string, unknown> = {}): string {
+function cfg(assertions: GateAssertion[], extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ enabled: true, maxRetries: 3, assertions, ...extra });
 }
 
@@ -15,7 +17,7 @@ function makeFakeClient() {
       promptAsync: vi.fn(async () => ({ info: {}, parts: [] })),
     },
     tui: { showToast: vi.fn(async () => {}) },
-  } as unknown;
+  } as TestClient;
 }
 
 async function setup(files: Record<string, string>) {
@@ -23,7 +25,9 @@ async function setup(files: Record<string, string>) {
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
   const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as unknown)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   await hooks.event({
     event: {
       type: 'session.created',
@@ -32,14 +36,14 @@ async function setup(files: Record<string, string>) {
   });
   await hooks['chat.message']({ sessionID: 's1' }, {
     parts: [{ type: 'text', text: '[completion-gate]' }],
-  } as unknown);
+  } as TestOutput);
   return { dir, client, hooks, mod };
 }
 
 // Slash /gate aborts the command flow with a sentinel rejection (no LLM
-// turn) AFTER arming the gate â€” helpers swallow it and keep going.
-async function runGateSlash(hooks: unknown, sessionID: string, args: string, text: string) {
-  const out = { parts: [{ type: 'text', text }] } as unknown;
+// turn) AFTER arming the gate — helpers swallow it and keep going.
+async function runGateSlash(hooks: TestHooks, sessionID: string, args: string, text: string) {
+  const out = { parts: [{ type: 'text', text }] } as TestOutput;
   await hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out).catch(
     () => {}
   );
@@ -51,7 +55,9 @@ async function setupWithSlashCommand(files: Record<string, string>) {
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
   const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as unknown)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   await hooks.event({
     event: {
       type: 'session.created',
@@ -67,7 +73,9 @@ async function setupCommandOnly(files: Record<string, string>) {
   const dir = makeTempProject(files);
   const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as unknown)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   await hooks.event({
     event: {
       type: 'session.created',
@@ -86,12 +94,14 @@ async function setupResumedWithSlashCommand(files: Record<string, string>) {
     data: { id: 'resumed', directory: dir, parentID: undefined },
     error: undefined,
   });
-  const hooks = await (mod.default as unknown)({ client });
+  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
+    client,
+  });
   const out = await runGateSlash(hooks, 'resumed', '', '[completion-gate]');
   return { dir, client, hooks, mod, out };
 }
 
-async function fireIdle(hooks: unknown, sessionID = 's1') {
+async function fireIdle(hooks: TestHooks, sessionID = 's1') {
   await hooks.event({
     event: { type: 'session.status', properties: { sessionID, status: { type: 'idle' } } },
   });
@@ -294,13 +304,13 @@ describe('turn-end gate flow', () => {
     });
     const mod = await import('../src/core.js');
     const client = makeFakeClient();
-    let resolveLookup!: (value: unknown) => void;
+    let resolveLookup!: (value: TestHooks) => void;
     const lookup = new Promise<unknown>((resolve) => {
       resolveLookup = resolve;
     });
     client.session.get.mockReturnValue(lookup);
-    const hooks = await (mod.default as unknown)({ client });
-    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as unknown;
+    const hooks = await (mod.default as TestPlugin)({ client });
+    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     const commandPromise = hooks['command.execute.before'](
       { command: 'gate', sessionID: 'resumed-race', arguments: '' },
@@ -373,7 +383,7 @@ describe('turn-end gate flow', () => {
     expect(client.tui.showToast).not.toHaveBeenCalled();
 
     client.session.get.mockRejectedValue(new Error('session no longer exists'));
-    const out = { parts: [{ type: 'text', text: '[completion-gate] status' }] } as unknown;
+    const out = { parts: [{ type: 'text', text: '[completion-gate] status' }] } as TestOutput;
     await hooks['command.execute.before'](
       { command: 'gate', sessionID: 's1', arguments: 'status' },
       out
@@ -396,8 +406,8 @@ describe('turn-end gate flow', () => {
       data: { id: 'child', directory: dir, parentID: 'root' },
       error: undefined,
     });
-    const hooks = await (mod.default as unknown)({ client });
-    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as unknown;
+    const hooks = await (mod.default as TestPlugin)({ client });
+    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     await hooks['command.execute.before'](
       { command: 'gate', sessionID: 'child', arguments: '' },
@@ -429,8 +439,8 @@ describe('turn-end gate flow', () => {
       data: { id: 'malformed-parent', directory: dir, parentID },
       error: undefined,
     });
-    const hooks = await (mod.default as unknown)({ client });
-    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as unknown;
+    const hooks = await (mod.default as TestPlugin)({ client });
+    const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     await hooks['command.execute.before'](
       { command: 'gate', sessionID: 'malformed-parent', arguments: '' },
@@ -473,12 +483,12 @@ describe('turn-end gate flow', () => {
     await fireIdle(hooks);
     await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1)); // retry 1/1
 
-    await fireIdle(hooks); // cap reached â†’ escalate
+    await fireIdle(hooks); // cap reached → escalate
     await vi.waitFor(() => expect(client.tui.showToast).toHaveBeenCalledTimes(1));
     expect(client.tui.showToast.mock.calls[0][0].body.variant).toBe('error');
     expect(client.tui.showToast.mock.calls[0][0].body.message).toContain('still failing');
 
-    await fireIdle(hooks); // exhausted â†’ nothing more
+    await fireIdle(hooks); // exhausted → nothing more
     expect(client.session.promptAsync).toHaveBeenCalledTimes(1);
     expect(client.tui.showToast).toHaveBeenCalledTimes(1);
   });
@@ -489,7 +499,7 @@ describe('turn-end gate flow', () => {
     await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
     expect(client.session.promptAsync.mock.calls[0][0].body.parts[0].text).toContain('passed');
 
-    await fireIdle(hooks); // consecutive pass â†’ silent
+    await fireIdle(hooks); // consecutive pass → silent
     expect(client.session.promptAsync).toHaveBeenCalledTimes(1);
   });
 
@@ -504,7 +514,7 @@ describe('turn-end gate flow', () => {
     };
     const { client, hooks } = await setup({ c: cfg([COUNT_CMD]) });
 
-    await fireIdle(hooks); // pass #1 â†’ success note
+    await fireIdle(hooks); // pass #1 → success note
     await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
     // success note wakes the agent; its next idle must NOT re-run the assertions
     await fireIdle(hooks);
@@ -515,7 +525,7 @@ describe('turn-end gate flow', () => {
     // a genuine user message restarts validation
     await hooks['chat.message']({ sessionID: 's1' }, {
       parts: [{ type: 'text', text: 'one more change please' }],
-    } as unknown);
+    } as TestOutput);
     await fireIdle(hooks);
     await new Promise((r) => setTimeout(r, 400));
     expect(readFileSync(marker, 'utf8')).toBe('xx');
@@ -558,7 +568,7 @@ describe('turn-end gate flow', () => {
   });
 
   it('unknown assertion types surface as failures (forward-compatible)', async () => {
-    // config validator rejects unknown types â†’ gate skips silently; assert no crash & no toast
+    // config validator rejects unknown types → gate skips silently; assert no crash & no toast
     const { client, hooks } = await setup({
       c: '{"enabled":true,"maxRetries":3,"assertions":[{"type":"mystery"}]}',
     });
@@ -575,17 +585,17 @@ describe('turn-end gate flow', () => {
         maxRetries: 1,
       }),
     });
-    await fireIdle(hooks); // fail â†’ inject RETRY 1/1
+    await fireIdle(hooks); // fail → inject RETRY 1/1
     await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
 
-    await fireIdle(hooks); // cap reached â†’ escalate
+    await fireIdle(hooks); // cap reached → escalate
     await vi.waitFor(() => expect(client.tui.showToast).toHaveBeenCalledTimes(1));
 
     await hooks['chat.message']({ sessionID: 's1' }, {
       parts: [{ type: 'text', text: 'try a different approach' }],
-    } as unknown);
+    } as TestOutput);
 
-    await fireIdle(hooks); // budget restored â†’ injects again instead of staying escalated
+    await fireIdle(hooks); // budget restored → injects again instead of staying escalated
     await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(2));
     expect(client.tui.showToast).toHaveBeenCalledTimes(1); // escalation was cleared, not repeated
     expect(client.session.promptAsync.mock.calls[1][0].body.parts[0].text).toContain('RETRY 1/1');
@@ -610,9 +620,9 @@ describe('turn-end gate flow', () => {
     await new Promise((r) => setTimeout(r, 150));
     await hooks['chat.message']({ sessionID: 's1' }, {
       parts: [{ type: 'text', text: '[completion-gate] off' }],
-    } as unknown);
+    } as TestOutput);
 
-    // The command eventually fails â€” but the aborted run must stay silent.
+    // The command eventually fails — but the aborted run must stay silent.
     await new Promise((r) => setTimeout(r, 1200));
     expect(client.session.promptAsync).toHaveBeenCalledTimes(1);
     expect(client.tui.showToast).toHaveBeenCalledWith({

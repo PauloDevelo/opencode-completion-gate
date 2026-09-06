@@ -1,4 +1,4 @@
-import type { Plugin } from '@opencode-ai/plugin';
+import type { Hooks, Plugin, PluginInput } from '@opencode-ai/plugin';
 import { readFileSync, appendFileSync, existsSync, mkdirSync, mkdtempSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -350,21 +350,10 @@ const INJECTED_SUCCESS_RE = /^✅ Completion gate passed \([^\n]*\)\. You may re
 
 type GateMode = 'combined' | 'command-only';
 
-interface HookOutput {
-  parts?: Array<{ type?: string; text?: string }>;
+type PluginClient = PluginInput['client'];
+type HookOutput = Parameters<NonNullable<Hooks['command.execute.before']>>[1] & {
   noReply?: boolean;
-}
-
-interface PluginClient {
-  session: {
-    get(options: unknown): Promise<unknown>;
-    create(options?: unknown): Promise<unknown>;
-    prompt(options: unknown): Promise<unknown>;
-    abort?(options: unknown): Promise<unknown>;
-    promptAsync(options: unknown): Promise<unknown>;
-  };
-  tui: { showToast(options: unknown): Promise<unknown> };
-}
+};
 
 interface GateSessionState {
   sessionID: string;
@@ -1286,13 +1275,7 @@ export function parseVerdict(output: string): 'PASS' | 'FAIL' | null {
 //   session.abort({ path: { id } })                        -> boolean
 // hey-api clients resolve to { data?, error? }; unwrapSdk also accepts payloads
 // returned directly, so unit tests can pass simpler fakes.
-export interface ReviewSessionClient {
-  session: {
-    create(options?: unknown): Promise<unknown>;
-    prompt(options: unknown): Promise<unknown>;
-    abort?(options: unknown): Promise<unknown>;
-  };
-}
+export type ReviewSessionClient = Pick<PluginClient, 'session'>;
 
 function unwrapSdk<T>(res: unknown): T {
   if (res && typeof res === 'object' && ('data' in res || 'error' in res)) {
@@ -1326,6 +1309,10 @@ function reviewerText(res: unknown): string {
 function describeSdkError(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'string') return err;
+  if (err && typeof err === 'object' && 'message' in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
   try {
     return JSON.stringify(err);
   } catch {
@@ -1690,8 +1677,8 @@ const plugin: Plugin = async ({ client }) => {
         applied = await applyToggle(client, state, commandArguments);
         // Forward-compatible: anomalyco/opencode#46579 adds output.noReply to
         // skip the agent turn. Unreleased in 1.18.x — ignored until then.
-        (output as unknown as HookOutput).noReply = true;
-        clearParts(output as unknown as HookOutput);
+        (output as HookOutput).noReply = true;
+        clearParts(output as HookOutput);
         if (applied.kind === 'enabled') {
           await warnIfNothingToRun(client, state);
           kickGateTurnEnd(client, state, 'enabled via /gate');

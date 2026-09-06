@@ -1,4 +1,5 @@
-﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TestClient, TestHooks, TestPlugin } from './helpers.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
@@ -16,20 +17,22 @@ function makeFakeClient() {
       promptAsync: vi.fn(async () => ({ info: {}, parts: [] })),
     },
     tui: { showToast: vi.fn(async () => {}) },
-  } as unknown;
+  } as TestClient;
 }
 
-async function freshHooks(client: unknown) {
+async function freshHooks(client: TestClient) {
   vi.resetModules();
   const mod = await import('../src/core.js');
-  return { hooks: await (mod.default as unknown)({ client }) };
+  return {
+    hooks: await (mod.default as TestPlugin)({ client }),
+  };
 }
 
 function toB64(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64');
 }
 
-function fireCreated(hooks: unknown, id: string, directory: string) {
+function fireCreated(hooks: TestHooks, id: string, directory: string) {
   return hooks.event({
     event: {
       type: 'session.created',
@@ -38,7 +41,7 @@ function fireCreated(hooks: unknown, id: string, directory: string) {
   });
 }
 
-function fireIdle(hooks: unknown, sessionID: string) {
+function fireIdle(hooks: TestHooks, sessionID: string) {
   return hooks.event({
     event: { type: 'session.status', properties: { sessionID, status: { type: 'idle' } } },
   });
