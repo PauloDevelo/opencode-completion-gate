@@ -1275,7 +1275,13 @@ export function parseVerdict(output: string): 'PASS' | 'FAIL' | null {
 //   session.abort({ path: { id } })                        -> boolean
 // hey-api clients resolve to { data?, error? }; unwrapSdk also accepts payloads
 // returned directly, so unit tests can pass simpler fakes.
-export type ReviewSessionClient = Pick<PluginClient, 'session'>;
+export interface ReviewSessionClient {
+  session: {
+    create(options?: unknown): Promise<unknown>;
+    prompt(options: unknown): Promise<unknown>;
+    abort?(options: unknown): Promise<unknown>;
+  };
+}
 
 function unwrapSdk<T>(res: unknown): T {
   if (res && typeof res === 'object' && ('data' in res || 'error' in res)) {
@@ -1555,7 +1561,7 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
         .showToast({
           body: {
             variant: 'error',
-            message: `â†’ Completion gate "${last.name}" still failing after ${cap.value} retries — manual attention needed`,
+            message: `→ Completion gate "${last.name}" still failing after ${cap.value} retries — manual attention needed`,
             duration: 15000,
           },
         })
@@ -1717,7 +1723,7 @@ const plugin: Plugin = async ({ client }) => {
         }
 
         if (!text.trimStart().startsWith(MARKER)) {
-          // genuine user message â†’ reset the fix-cycle budget
+          // genuine user message → reset the fix-cycle budget
           state.retries = 0;
           state.escalated = false;
           state.lastOutcome = null;
