@@ -20,7 +20,7 @@ function makeFakeClient() {
   } as TestClient;
 }
 
-async function setup(files: Record<string, string>) {
+async function setup(files: Record<string, string>, agent?: string) {
   vi.resetModules();
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
   const mod = await import('../src/core.js');
@@ -34,7 +34,7 @@ async function setup(files: Record<string, string>) {
       properties: { info: { id: 's1', directory: dir, parentID: undefined } },
     },
   });
-  await hooks['chat.message']({ sessionID: 's1' }, {
+  await hooks['chat.message']({ sessionID: 's1', agent }, {
     parts: [{ type: 'text', text: '[completion-gate]' }],
   } as TestOutput);
   return { dir, client, hooks, mod };
@@ -142,6 +142,32 @@ describe('turn-end gate flow', () => {
     expect(call.body.parts[0].text).toContain('bad');
     expect(call.body.parts[0].text).toContain('boom');
     expect(call.body.parts[0].text).toContain('RETRY 1/3');
+  });
+
+  it('preserves the active agent when injecting retry feedback', async () => {
+    const { client, hooks } = await setup(
+      {
+        c: cfg([{ type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 }]),
+      },
+      'resource-translator'
+    );
+
+    await fireIdle(hooks);
+
+    await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
+    expect(client.session.promptAsync.mock.calls[0][0].body.agent).toBe('resource-translator');
+  });
+
+  it('preserves the active agent when injecting a success notice', async () => {
+    const { client, hooks } = await setup(
+      { c: cfg([{ type: 'command', name: 'ok', run: OK_CMD.run, timeoutSeconds: 30 }]) },
+      'resource-translator'
+    );
+
+    await fireIdle(hooks);
+
+    await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
+    expect(client.session.promptAsync.mock.calls[0][0].body.agent).toBe('resource-translator');
   });
 
   it('slash command enables turn-end gating', async () => {
