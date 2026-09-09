@@ -40,7 +40,9 @@ Orchestration launchers arm command-only mode out-of-band with the
 (`command-only` default, `combined` to also run project assertions) and the
 optional `OPENCODE_GATE_BOOTSTRAP_MAX_RETRIES` (positive integer; honored only
 in `command-only` mode as the session retry override, ignored otherwise).
-The plugin consumes them one-shot on `session.created`, enables the gate, and
+The plugin captures them when it initializes, with a fallback read at
+`session.created` for launchers that set them slightly later, then consumes them
+one-shot for the first valid top-level session, enables the gate, and
 confirms with a toast carrying the command
 (`Completion gate armed (<mode>): <command>`, with a `· maxRetries=N` suffix
 when a session override applies) — nothing enters the chat transcript. The legacy

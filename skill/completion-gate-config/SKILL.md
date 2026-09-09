@@ -64,6 +64,13 @@ Non-positive or non-numeric values for the numeric fields silently fall back to 
 
 > Session note: `/gate --only "<command>" --retries N` overrides the file's `maxRetries` for that session's command-only run (falls back to the config value when omitted). This skill covers the file schema only — the override lives in the plugin session state, not in this JSON.
 
+Launcher note: `OPENCODE_GATE_BOOTSTRAP_MAX_RETRIES` is the equivalent
+session override for an out-of-band command-only bootstrap. It takes precedence
+over the project value for the first bootstrapped session. The plugin captures
+bootstrap variables during initialization, with a fallback read at session
+creation, and consumes them once; combined bootstrap mode continues to use the
+project `maxRetries`.
+
 ## Assertion Types
 
 Assertions run **sequentially**; the first failure short-circuits the rest so the evidence stays focused.

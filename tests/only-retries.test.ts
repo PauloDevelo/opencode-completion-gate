@@ -327,6 +327,38 @@ describe('--only --retries override (RED)', () => {
     expect(process.env[RETRY_ENV]).toBeUndefined();
   });
 
+  it('captures the bootstrap retry override before session initialization', async () => {
+    const client = makeFakeClient();
+    const dir = makeTempProject({
+      '.opencode/completion-gate.json': JSON.stringify({
+        enabled: true,
+        maxRetries: 3,
+        assertions: [
+          { type: 'command', name: 'ok', run: 'node -e "process.exit(0)"', timeoutSeconds: 30 },
+        ],
+      }),
+    });
+    process.env[PLAIN_ENV] = 'node -e "process.exit(1)"';
+    process.env[RETRY_ENV] = '25';
+    const { hooks } = await freshHooks(client);
+
+    delete process.env[PLAIN_ENV];
+    delete process.env[RETRY_ENV];
+    await registerSession(hooks, 'boot-before-session', dir);
+    await hooks.event({
+      event: {
+        type: 'session.status',
+        properties: {
+          sessionID: 'boot-before-session',
+          status: { type: 'idle' },
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
+    expect(client.session.promptAsync.mock.calls[0][0].body.parts[0].text).toContain('RETRY 1/25');
+  });
+
   it('bootstrap retry env is ignored in combined mode and invalid values fall back', async () => {
     const client = makeFakeClient();
     const { hooks } = await freshHooks(client);

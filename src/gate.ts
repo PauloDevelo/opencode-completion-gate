@@ -483,6 +483,12 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
 }
 
 const plugin: Plugin = async ({ client }) => {
+  // Capture launcher settings before the first session event. Launchers can
+  // clean up their environment after starting OpenCode but before the host
+  // emits session.created.
+  let pendingBootstrap = readBootstrapGateCommand();
+  if (pendingBootstrap) consumeBootstrapGateCommand();
+
   return {
     event: async ({ event }) => {
       try {
@@ -517,7 +523,8 @@ const plugin: Plugin = async ({ client }) => {
           logDiag(`registered session ${created.sessionID} (${created.directory})`);
           // Out-of-band arming (toast-only, no chat): consume a launcher-provided
           // bootstrap command exactly once so only the startup session arms.
-          const bootstrap = readBootstrapGateCommand();
+          const bootstrap = pendingBootstrap ?? readBootstrapGateCommand();
+          pendingBootstrap = null;
           if (bootstrap) {
             consumeBootstrapGateCommand();
             created.extraCommand = bootstrap.command;
