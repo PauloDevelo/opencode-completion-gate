@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.3.0...v1.3.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* honor bootstrap retry override before session creation ([#10](https://github.com/PauloDevelo/opencode-completion-gate/issues/10)) ([8cccd1e](https://github.com/PauloDevelo/opencode-completion-gate/commit/8cccd1ede29ead0325c18f6923e22d920353615d))
+
 ## [1.3.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.2.0...v1.3.0) (2026-09-09)
 
 
