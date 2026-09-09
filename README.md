@@ -55,3 +55,12 @@ Config lives per project at `<project-root>/.opencode/completion-gate.json` (re-
 ```
 
 Assertion types: `command`, `ado-pr`, `opencode-review`. See [completion-gate-plugin.md](completion-gate-plugin.md) for the full schema, ADO PR polling, review sessions, diagnostics (`gate-diag.log`), and troubleshooting.
+
+Orchestration launchers can arm the first session without a chat message by
+setting `OPENCODE_GATE_BOOTSTRAP_COMMAND_B64` (or
+`OPENCODE_GATE_BOOTSTRAP_COMMAND`) and optionally
+`OPENCODE_GATE_BOOTSTRAP_MAX_RETRIES`. The retry override is honored for
+command-only bootstrap sessions and takes precedence over the project's
+`maxRetries`; combined mode uses the project value. Bootstrap settings are
+captured during plugin initialization, with a fallback read when the first
+session is created, and are consumed once.
