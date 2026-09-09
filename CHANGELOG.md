@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.2.0...v1.3.0) (2026-09-09)
+
+
+### Features
+
+* preserve active agent after feedback in completion gate ([#8](https://github.com/PauloDevelo/opencode-completion-gate/issues/8)) ([77814c9](https://github.com/PauloDevelo/opencode-completion-gate/commit/77814c98685e9babc8a30d413b81ebac8781a8a9))
+
 ## [1.2.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.1.1...v1.2.0) (2026-09-06)
 
 
