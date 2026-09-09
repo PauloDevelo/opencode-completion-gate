@@ -56,6 +56,7 @@ type HookOutput = Parameters<NonNullable<Hooks['command.execute.before']>>[1] & 
 interface GateSessionState {
   sessionID: string;
   directory: string;
+  currentAgent?: string;
   gateEnabled: boolean;
   extraCommand?: string;
   gateMode: GateMode;
@@ -429,6 +430,7 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
       .promptAsync({
         path: { id: state.sessionID },
         body: {
+          ...(state.currentAgent ? { agent: state.currentAgent } : {}),
           parts: [
             {
               type: 'text',
@@ -472,7 +474,10 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
   await client.session
     .promptAsync({
       path: { id: state.sessionID },
-      body: { parts: [{ type: 'text', text: injectFailureText(state, last, cap.value) }] },
+      body: {
+        ...(state.currentAgent ? { agent: state.currentAgent } : {}),
+        parts: [{ type: 'text', text: injectFailureText(state, last, cap.value) }],
+      },
     })
     .catch((err: unknown) => logDiag(`retry prompt error: ${describeSdkError(err)}`));
 }
@@ -592,10 +597,11 @@ const plugin: Plugin = async ({ client }) => {
       }
     },
 
-    'chat.message': async ({ sessionID }, output) => {
+    'chat.message': async ({ sessionID, agent }, output) => {
       try {
         const state = sessions.get(sessionID);
         if (!state || state.deleted) return;
+        if (typeof agent === 'string' && agent.trim() !== '') state.currentAgent = agent;
         if (!Array.isArray(output?.parts) || output.parts.length === 0) return; // already cleared (toast-only) — nothing to do
         const textPart = output.parts.find((p) => p?.type === 'text');
         if (!textPart) return;

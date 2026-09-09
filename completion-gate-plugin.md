@@ -21,6 +21,8 @@ Typical workflow:
 3. The agent works; each time it goes idle the gate runs your assertions.
 4. All pass → `✅ Completion gate passed (...)` appears once and the agent may report done.
 5. Something fails → the agent is re-prompted with the failure evidence and keeps fixing until it passes or hits the retry cap.
+
+Retry and success injections preserve the active primary agent from the gated turn. For example, a `resource-translator` session remains on `resource-translator` after completion-gate feedback instead of falling back to the default `build` agent. Only the agent identity is preserved; model/provider selection is unchanged.
 6. `/gate off` when you're done.
 
 ```

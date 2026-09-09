@@ -13,7 +13,7 @@ export interface TestClient {
 }
 export interface TestHooks {
   event(input: { event: Record<string, unknown> }): Promise<void>;
-  'chat.message'(input: { sessionID: string }, output: TestOutput): Promise<void>;
+  'chat.message'(input: { sessionID: string; agent?: string }, output: TestOutput): Promise<void>;
   'command.execute.before'(
     input: { command: string; sessionID: string; arguments: string },
     output: TestOutput
