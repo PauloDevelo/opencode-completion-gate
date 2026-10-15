@@ -72,6 +72,7 @@ interface GateRuntime {
   bootstrapPending: BootstrapCommand;
   bootstrapCaptured: boolean;
   seen: Set<string>;
+  seenPrompts: Set<string>;
 }
 
 // OpenCode V2 evaluates a plugin once per location/host, so the same module can
@@ -92,6 +93,7 @@ function runtime(): GateRuntime {
       bootstrapPending: null,
       bootstrapCaptured: false,
       seen: new Set(),
+      seenPrompts: new Set(),
     };
     store[RUNTIME_KEY] = rt;
   }
@@ -401,18 +403,18 @@ function buildReviewClient(ctx: GateContext): ReviewSessionClient {
 
   return {
     session: {
-      create: async () => {
-        const created = await ctx.session.create({ title: 'completion-gate self-review' });
+      create: async (input) => {
+        const created = await ctx.session.create(
+          input?.directory
+            ? { title: 'completion-gate self-review', location: { directory: input.directory } }
+            : { title: 'completion-gate self-review' }
+        );
         return { id: created?.id };
       },
       prompt: async ({ sessionID, text, agent }) => {
-        if (agent) {
-          try {
-            await ctx.session.switchAgent({ sessionID, agent });
-          } catch (err) {
-            logDiag(`review switchAgent failed: ${describeSdkError(err)}`);
-          }
-        }
+        // A bad agent must fail the assertion (actionable evidence), not silently
+        // degrade to the session default — matches V1 behavior.
+        if (agent) await ctx.session.switchAgent({ sessionID, agent });
         await ctx.session.prompt({ sessionID, text });
         await ctx.session.wait({ sessionID });
       },
@@ -552,12 +554,22 @@ async function runGateTurnEnd(ctx: GateContext, state: GateSessionState): Promis
 
 interface PromptHookEvent {
   sessionID?: unknown;
+  messageID?: unknown;
   prompt?: { text?: string };
 }
 
 async function handlePrompt(ctx: GateContext, event: PromptHookEvent): Promise<void> {
   const sessionID = asString(event?.sessionID);
   if (!sessionID) return;
+  // The prompt hook is registered once per plugin instance and every instance
+  // runs it, so a single message would be handled N times. Dedupe by message id.
+  const messageID = asString(event?.messageID);
+  if (messageID) {
+    const rt = runtime();
+    if (rt.seenPrompts.has(messageID)) return;
+    rt.seenPrompts.add(messageID);
+    if (rt.seenPrompts.size > 5000) rt.seenPrompts.clear();
+  }
   const state = runtime().sessions.get(sessionID);
   if (!state || state.deleted) return;
   const text: string = event?.prompt?.text ?? '';
@@ -720,7 +732,7 @@ const plugin = Plugin.define({
     }
 
     // Own the `/gate` command outright (V2 has no global command.execute.before).
-    await ctx.command.transform((editor) => {
+    const commandReg = await ctx.command.transform((editor) => {
       editor.add({
         name: 'gate',
         description:
@@ -729,7 +741,12 @@ const plugin = Plugin.define({
           try {
             const state = await getOrRegisterSession(ctx, sessionID);
             if (!state || state.deleted) return;
-            const argument = (prompt?.text ?? '').trim();
+            // The composed command prompt may carry the command token; keep only
+            // the arguments.
+            const argument = (prompt?.text ?? '')
+              .trim()
+              .replace(/^\/gate\b/i, '')
+              .trim();
             const applied = await applyToggle(ctx, state, argument);
             if (applied.kind === 'enabled') {
               await warnIfNothingToRun(ctx, state);
@@ -744,7 +761,7 @@ const plugin = Plugin.define({
 
     // Prompt hook: reset the fix-cycle budget on genuine user messages and keep
     // honoring the legacy [completion-gate-internal] --only directive.
-    await ctx.session.hook('prompt', async (event) => {
+    const hookReg = await ctx.session.hook('prompt', async (event) => {
       try {
         await handlePrompt(ctx, event as unknown as PromptHookEvent);
       } catch (err) {
@@ -789,6 +806,8 @@ const plugin = Plugin.define({
 
     return () => {
       controller.abort();
+      void (commandReg as { dispose?: () => unknown })?.dispose?.();
+      void (hookReg as { dispose?: () => unknown })?.dispose?.();
     };
   },
 });

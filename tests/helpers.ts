@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
+import { vi } from 'vitest';
 import type { Mock } from 'vitest';
 
 export interface TestOutput {
@@ -22,11 +23,18 @@ export interface TestClient {
 }
 export interface TestHooks {
   event(input: { event: Record<string, unknown> }): Promise<void>;
-  'chat.message'(input: { sessionID: string; agent?: string }, output: TestOutput): Promise<void>;
+  'chat.message'(
+    input: { sessionID: string; agent?: string; messageID?: string },
+    output: TestOutput
+  ): Promise<void>;
   'command.execute.before'(
     input: { command: string; sessionID: string; arguments: string },
     output: TestOutput
   ): Promise<void>;
+  /** Run the plugin's setup cleanup (disposes registrations + subscription). */
+  dispose(): Promise<void>;
+  /** Registration-disposal spies, for asserting cleanup behavior. */
+  registrations: { commandDispose: Mock; hookDispose: Mock };
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +89,11 @@ export async function startPlugin(client: TestClient): Promise<TestHooks> {
   // per-location instances OpenCode loads). Reset it so tests stay isolated
   // despite `vi.resetModules()` not clearing globalThis.
   delete (globalThis as Record<symbol, unknown>)[Symbol.for('opencode.completion-gate.runtime.v2')];
-  const registrations: { command?: { execute: (input: unknown) => Promise<void> } } = {};
+  const registrations: {
+    command?: { execute: (input: unknown) => Promise<void> };
+    commandDispose: Mock;
+    hookDispose: Mock;
+  } = { commandDispose: vi.fn(async () => {}), hookDispose: vi.fn(async () => {}) };
 
   // Event stream: an async iterable fed by the harness.
   const queue: AnyRecord[] = [];
@@ -149,7 +161,7 @@ export async function startPlugin(client: TestClient): Promise<TestHooks> {
     interrupt: client.session.abort ?? (async () => {}),
     hook: async (_name: string, cb: unknown) => {
       promptHook = cb as (event: unknown) => Promise<void>;
-      return { dispose: async () => {} };
+      return { dispose: registrations.hookDispose };
     },
   };
 
@@ -168,12 +180,12 @@ export async function startPlugin(client: TestClient): Promise<TestHooks> {
         cb({
           add: (def) => (registrations.command = def as { execute: (i: unknown) => Promise<void> }),
         });
-        return { dispose: async () => {} };
+        return { dispose: registrations.commandDispose };
       },
     },
   };
 
-  await (mod.default as { setup: (ctx: unknown) => Promise<unknown> }).setup(ctx);
+  const cleanup = await (mod.default as { setup: (ctx: unknown) => Promise<unknown> }).setup(ctx);
 
   const settle = () => new Promise((r) => setTimeout(r, 0));
 
@@ -194,12 +206,13 @@ export async function startPlugin(client: TestClient): Promise<TestHooks> {
       await settle();
       void output; // V2 command execution never mutates the hook output
     },
-    'chat.message': async ({ sessionID }, output) => {
+    'chat.message': async ({ sessionID, messageID }, output) => {
       if (!Array.isArray(output?.parts) || output.parts.length === 0) return;
       const textPart = output.parts.find((p) => p?.type === 'text');
       if (!textPart || !promptHook) return;
       const draft = {
         sessionID,
+        messageID,
         prompt: { text: textPart.text ?? '' },
         metadata: {},
         delivery: 'steer',
@@ -208,6 +221,10 @@ export async function startPlugin(client: TestClient): Promise<TestHooks> {
       if (draft.prompt.text) textPart.text = draft.prompt.text;
       else output.parts.length = 0;
     },
+    dispose: async () => {
+      if (typeof cleanup === 'function') await cleanup();
+    },
+    registrations,
   };
 }
 
