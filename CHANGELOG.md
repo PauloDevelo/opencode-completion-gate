@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.3.1...v2.0.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* requires OpenCode V2 (@opencode/plugin >= 2.0); the V1 plugin API is no longer supported. The commands/gate.md markdown command is removed because the plugin registers /gate itself.
+
+### Features
+
+* port to the OpenCode V2 plugin API ([#12](https://github.com/PauloDevelo/opencode-completion-gate/issues/12)) ([385a93c](https://github.com/PauloDevelo/opencode-completion-gate/commit/385a93cab5f74e2e75677401e9c5a57fa47c785c))
+
 ## [1.3.1](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.3.0...v1.3.1) (2026-09-09)
 
 
