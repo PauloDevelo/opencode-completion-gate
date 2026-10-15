@@ -1,10 +1,10 @@
-import type { TestClient, TestHooks, TestPlugin } from './helpers.js';
+import type { TestClient, TestHooks } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeTempProject } from './helpers.js';
+import { makeTempProject, startPlugin } from './helpers.js';
 
 const B64_ENV = 'OPENCODE_GATE_BOOTSTRAP_COMMAND_B64';
 const PLAIN_ENV = 'OPENCODE_GATE_BOOTSTRAP_COMMAND';
@@ -22,9 +22,8 @@ function makeFakeClient() {
 
 async function freshHooks(client: TestClient) {
   vi.resetModules();
-  const mod = await import('../src/core.js');
   return {
-    hooks: await (mod.default as TestPlugin)({ client }),
+    hooks: await startPlugin(client),
   };
 }
 

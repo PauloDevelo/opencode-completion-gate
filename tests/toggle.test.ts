@@ -1,9 +1,9 @@
-import type { TestClient, TestHooks, TestOutput, TestPlugin } from './helpers.js';
+import type { TestClient, TestHooks, TestOutput } from './helpers.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeTempProject } from './helpers.js';
+import { makeTempProject, startPlugin } from './helpers.js';
 
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>();
@@ -22,12 +22,10 @@ function makeFakeClient() {
 
 async function freshHooks(client: TestClient) {
   vi.resetModules();
-  const mod = await import('../src/core.js');
-  const hooks = await (mod.default as TestPlugin)({ client });
-  return hooks;
+  return startPlugin(client);
 }
 
-describe('/gate toggle via chat.message', () => {
+describe('/gate toggle via the plugin command + prompt hook', () => {
   let client: TestClient;
 
   beforeEach(() => {
@@ -47,14 +45,12 @@ describe('/gate toggle via chat.message', () => {
     return { parts: [{ type: 'text', text }] } as TestOutput;
   }
 
-  // Slash /gate is fully handled by the plugin: it arms/reports, shows a
-  // toast, then throws a sentinel to abort the command flow so the model
-  // stays idle (no LLM turn). The rejection IS the expected outcome.
+  // Slash /gate is owned by the plugin (ctx.command.transform). V2 has no model
+  // turn to abort, so invoking it simply arms/reports and emits a synthetic
+  // notice (bridged to a toast in tests).
   async function runGateSlash(hooks: TestHooks, sessionID: string, args: string, text: string) {
     const out = partsWith(text);
-    await expect(
-      hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out)
-    ).rejects.toThrow();
+    await hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out);
     return out;
   }
 
@@ -79,7 +75,7 @@ describe('/gate toggle via chat.message', () => {
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('mode=command-only') },
     });
-    expect(client.tui.showToast.mock.calls.at(-1)[0].body.message).toContain(
+    expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain(
       'extraCommand=configured'
     );
   });
@@ -89,7 +85,7 @@ describe('/gate toggle via chat.message', () => {
     await registeredSession(hooks);
     const out = partsWith('[completion-gate]');
     await hooks['chat.message']({ sessionID: 's1' }, out);
-    // chat.message cannot abort the turn — it swaps in an anchor instead.
+    // The prompt hook cannot suppress the turn, so it swaps in an anchor instead.
     expectAnchor(out, 'Completion gate enabled for this session.');
     expect(client.tui.showToast).toHaveBeenCalledWith({
       body: { variant: 'info', message: 'Completion gate enabled for this session.' },
@@ -128,18 +124,16 @@ describe('/gate toggle via chat.message', () => {
     });
   });
 
-  it('slash command enables the gate and aborts the turn (no LLM call)', async () => {
+  it('slash command enables the gate and emits a notice', async () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
 
-    const out = await runGateSlash(hooks, 's1', '', '[completion-gate]');
-    expect(out.parts).toHaveLength(0);
-    expect(out.noReply).toBe(true);
+    await runGateSlash(hooks, 's1', '', '[completion-gate]');
     expect(client.tui.showToast).toHaveBeenCalledWith({
       body: { variant: 'info', message: 'Completion gate enabled for this session.' },
     });
 
-    // Gate is armed despite the aborted turn — status reports ENABLED.
+    // Gate is armed — status reports ENABLED.
     const status = partsWith('[completion-gate] status');
     await hooks['chat.message']({ sessionID: 's1' }, status);
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
@@ -147,14 +141,12 @@ describe('/gate toggle via chat.message', () => {
     });
   });
 
-  it('slash command off disables the gate and shows a toast', async () => {
+  it('slash command off disables the gate and shows a notice', async () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
-    const enabledOut = await runGateSlash(hooks, 's1', '', '[completion-gate]');
-    expect(enabledOut.parts).toHaveLength(0);
+    await runGateSlash(hooks, 's1', '', '[completion-gate]');
 
-    const out = await runGateSlash(hooks, 's1', 'off', '[completion-gate] off');
-    expect(out.parts).toHaveLength(0);
+    await runGateSlash(hooks, 's1', 'off', '[completion-gate] off');
     expect(client.tui.showToast).toHaveBeenCalledWith({
       body: { variant: 'info', message: 'Completion gate disabled for this session.' },
     });
@@ -164,9 +156,8 @@ describe('/gate toggle via chat.message', () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
     await runGateSlash(hooks, 's1', '', '[completion-gate]');
-    const out = await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
+    await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
 
-    expect(out.parts).toHaveLength(0);
     expect(client.tui.showToast).toHaveBeenCalledWith({
       body: { variant: 'info', message: expect.stringContaining('Completion gate: ENABLED') },
     });
@@ -175,14 +166,13 @@ describe('/gate toggle via chat.message', () => {
   it('slash command with custom arguments enables the gate and registers the command', async () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
-    const out = await runGateSlash(
+    await runGateSlash(
       hooks,
       's1',
       'python scripts/assert_task_done.py',
       '[completion-gate] python scripts/assert_task_done.py'
     );
 
-    expect(out.parts).toHaveLength(0);
     expect(client.tui.showToast).toHaveBeenCalledWith({
       body: {
         variant: 'info',
@@ -194,20 +184,18 @@ describe('/gate toggle via chat.message', () => {
   it('slash command --only enables command-only mode and reports configured status without exposing the command', async () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
-    const out = await runGateSlash(
+    await runGateSlash(
       hooks,
       's1',
       '--only python scripts/assert_task_done.py',
       '[completion-gate] --only python scripts/assert_task_done.py'
     );
 
-    expect(out.parts).toHaveLength(0);
-    const status = await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
-    expect(status.parts).toHaveLength(0);
+    await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('extraCommand=configured') },
     });
-    expect(client.tui.showToast.mock.calls.at(-1)[0].body.message).toContain('mode=command-only');
+    expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain('mode=command-only');
   });
 
   it('invalid --only usage preserves the existing command-only state', async () => {
@@ -220,14 +208,12 @@ describe('/gate toggle via chat.message', () => {
       '[completion-gate] --only python scripts/assert_task_done.py'
     );
 
-    const invalid = await runGateSlash(hooks, 's1', '--only', '[completion-gate] --only');
-    expect(invalid.parts).toHaveLength(0);
+    await runGateSlash(hooks, 's1', '--only', '[completion-gate] --only');
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
-      body: { variant: 'error', message: 'Usage: /gate --only "command" [--retries N]' },
+      body: { variant: 'info', message: 'Usage: /gate --only "command" [--retries N]' },
     });
 
-    const status = await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
-    expect(status.parts).toHaveLength(0);
+    await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('Completion gate: ENABLED') },
     });
@@ -238,11 +224,9 @@ describe('/gate toggle via chat.message', () => {
     async (argument) => {
       const hooks = await freshHooks(client);
       await registeredSession(hooks);
-      const invalid = await runGateSlash(hooks, 's1', argument, `[completion-gate] ${argument}`);
+      await runGateSlash(hooks, 's1', argument, `[completion-gate] ${argument}`);
 
-      expect(invalid.parts).toHaveLength(0);
-      const status = await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
-      expect(status.parts).toHaveLength(0);
+      await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
       expect(client.tui.showToast).toHaveBeenLastCalledWith({
         body: { variant: 'info', message: expect.stringContaining('Completion gate: disabled') },
       });
@@ -252,16 +236,14 @@ describe('/gate toggle via chat.message', () => {
   it('accepts case-insensitive --only syntax with a separate command remainder', async () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
-    const out = await runGateSlash(
+    await runGateSlash(
       hooks,
       's1',
       '--ONLY python scripts/assert_task_done.py',
       '[completion-gate] --ONLY python scripts/assert_task_done.py'
     );
 
-    expect(out.parts).toHaveLength(0);
-    const status = await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
-    expect(status.parts).toHaveLength(0);
+    await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('mode=command-only') },
     });
@@ -280,7 +262,7 @@ describe('/gate toggle via chat.message', () => {
       expect(client.tui.showToast).toHaveBeenLastCalledWith({
         body: { variant: 'info', message: expect.stringContaining('mode=command-only') },
       });
-      expect(client.tui.showToast.mock.calls.at(-1)[0].body.message).toContain(
+      expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain(
         'extraCommand=configured'
       );
     }
@@ -296,7 +278,7 @@ describe('/gate toggle via chat.message', () => {
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('mode=combined') },
     });
-    expect(client.tui.showToast.mock.calls.at(-1)[0].body.message).toContain(
+    expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain(
       'extraCommand=configured'
     );
   });
@@ -338,7 +320,7 @@ describe('/gate toggle via chat.message', () => {
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('extraCommand=configured') },
     });
-    expect(client.tui.showToast.mock.calls.at(-1)[0].body.message).toContain('mode=command-only');
+    expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain('mode=command-only');
   });
 
   it('accepts the direct --only compatibility message and keeps generated messages untouched', async () => {
@@ -354,7 +336,7 @@ describe('/gate toggle via chat.message', () => {
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('mode=command-only') },
     });
-    expect(client.tui.showToast.mock.calls.at(-1)[0].body.message).toContain(
+    expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain(
       'extraCommand=configured'
     );
 
@@ -404,9 +386,8 @@ describe('/gate toggle via chat.message', () => {
       error: undefined,
     });
 
-    const out = await runGateSlash(hooks, 'resumed', 'status', '[completion-gate] status');
+    await runGateSlash(hooks, 'resumed', 'status', '[completion-gate] status');
 
-    expect(out.parts).toHaveLength(0);
     expect(client.session.get).toHaveBeenCalledWith({ path: { id: 'resumed' } });
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
       body: { variant: 'info', message: expect.stringContaining('Completion gate: disabled') },
@@ -555,7 +536,7 @@ describe('/gate toggle via chat.message', () => {
     expect(out.parts[0].text).toBe('[completion-gate] status');
   });
 
-  it('leaves the command output unchanged for an SDK error envelope', async () => {
+  it('leaves the command output unchanged for a missing session envelope', async () => {
     const hooks = await freshHooks(client);
     client.session.get.mockResolvedValue({
       data: undefined,
@@ -574,17 +555,13 @@ describe('/gate toggle via chat.message', () => {
     expect(out.parts[0].text).toBe('[completion-gate] status');
   });
 
-  it('still enables the gate and aborts the turn when showToast fails (headless)', async () => {
+  it('still enables the gate when the notice cannot be shown (headless)', async () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
     client.tui.showToast.mockRejectedValueOnce(new Error('no TUI'));
-    const out = partsWith('[completion-gate]');
 
-    await expect(
-      hooks['command.execute.before']({ command: 'gate', sessionID: 's1', arguments: '' }, out)
-    ).rejects.toThrow('Completion gate enabled for this session.');
+    await runGateSlash(hooks, 's1', '', '[completion-gate]');
 
-    expect(out.parts).toHaveLength(0);
     const status = partsWith('[completion-gate] status');
     await hooks['chat.message']({ sessionID: 's1' }, status);
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
@@ -619,48 +596,26 @@ describe('/gate toggle via chat.message', () => {
     await runGateSlash(hooks, 's1', '', '[completion-gate]');
 
     expect(client.tui.showToast).toHaveBeenLastCalledWith({
-      body: { variant: 'error', message: expect.stringContaining('nothing to run') },
+      body: { variant: 'info', message: expect.stringContaining('nothing to run') },
     });
   });
 
-  it('sentinel rejection carries the confirmation text', async () => {
+  it('slash command notices carry the confirmation text for off/status/usage', async () => {
     const hooks = await freshHooks(client);
     await registeredSession(hooks);
 
-    await expect(
-      hooks['command.execute.before'](
-        { command: 'gate', sessionID: 's1', arguments: 'off' },
-        partsWith('[completion-gate] off')
-      )
-    ).rejects.toThrow('Completion gate disabled for this session.');
-    await expect(
-      hooks['command.execute.before'](
-        { command: 'gate', sessionID: 's1', arguments: 'status' },
-        partsWith('[completion-gate] status')
-      )
-    ).rejects.toThrow('Completion gate: disabled');
-    await expect(
-      hooks['command.execute.before'](
-        { command: 'gate', sessionID: 's1', arguments: '--only' },
-        partsWith('[completion-gate] --only')
-      )
-    ).rejects.toThrow('Usage: /gate --only "command"');
-  });
-
-  it('ignores an already-cleared payload in chat.message without resetting state', async () => {
-    const hooks = await freshHooks(client);
-    await registeredSession(hooks);
-    const out = partsWith('[completion-gate]');
-    await expect(
-      hooks['command.execute.before']({ command: 'gate', sessionID: 's1', arguments: '' }, out)
-    ).rejects.toThrow();
-    expect(out.parts).toHaveLength(0);
-
-    // Second hook sees the cleared payload: no crash, no extra toast, no rewrite.
-    const toastCalls = client.tui.showToast.mock.calls.length;
-    await hooks['chat.message']({ sessionID: 's1' }, out);
-    expect(out.parts).toHaveLength(0);
-    expect(client.tui.showToast.mock.calls.length).toBe(toastCalls);
+    await runGateSlash(hooks, 's1', 'off', '[completion-gate] off');
+    expect(client.tui.showToast).toHaveBeenLastCalledWith({
+      body: { variant: 'info', message: 'Completion gate disabled for this session.' },
+    });
+    await runGateSlash(hooks, 's1', 'status', '[completion-gate] status');
+    expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain(
+      'Completion gate: disabled'
+    );
+    await runGateSlash(hooks, 's1', '--only', '[completion-gate] --only');
+    expect(client.tui.showToast.mock.calls.at(-1)![0].body.message).toContain(
+      'Usage: /gate --only "command"'
+    );
   });
 
   it('clears a lone internal directive with no remainder', async () => {

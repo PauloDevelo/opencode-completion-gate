@@ -1,4 +1,4 @@
-import type { Hooks, Plugin, PluginInput } from '@opencode-ai/plugin';
+import { Plugin } from '@opencode/plugin';
 import {
   brief,
   describeSdkError,
@@ -28,35 +28,28 @@ import type {
   ReviewSessionClient,
 } from './types.js';
 
+/** The V2 plugin context, as passed to `setup`. */
+type GateContext = Plugin.Context;
+
 // ---------------------------------------------------------------------------
-// Plugin state + hooks
+// Plugin state + handlers
 // ---------------------------------------------------------------------------
 
-// NOTE: deliberately NOT exported — opencode's legacy plugin loader requires
-// every runtime export of a plugin module to be a function (or {server});
-// a string export makes the whole plugin fail to load ("Plugin export is not
-// a function").
 const MARKER = '[completion-gate]';
 const INTERNAL_MARKER = '[completion-gate-internal]';
 // Out-of-band gate arming for orchestration launchers (e.g. Invoke-HerdrOpenCode.ps1):
 // the launcher sets these process-scoped env vars before spawning opencode, and
 // the session.created handler below consumes them (one-shot). Nothing enters the
-// --prompt chat transcript; confirmation is toast-only. _B64 takes precedence
-// when both are set (it avoids shell-quoting pitfalls in the launcher).
+// --prompt chat transcript; confirmation is a synthetic session message. _B64 takes
+// precedence when both are set (it avoids shell-quoting pitfalls in the launcher).
 const TOGGLE_RE = /^\[completion-gate\](?:\s+(.*?))?\s*$/i;
 const INJECTED_FAILURE_RE =
   /^✖ Completion gate failed — "[^"]+"\. Fix these issues, then finish again\.\n\n```[\s\S]*\n```\n\n\(RETRY \d+\/\d+\)$/;
 const INJECTED_SUCCESS_RE = /^✅ Completion gate passed \([^\n]*\)\. You may report done\.$/;
 
-type PluginClient = PluginInput['client'];
-type HookOutput = Parameters<NonNullable<Hooks['command.execute.before']>>[1] & {
-  noReply?: boolean;
-};
-
 interface GateSessionState {
   sessionID: string;
   directory: string;
-  currentAgent?: string;
   gateEnabled: boolean;
   extraCommand?: string;
   gateMode: GateMode;
@@ -70,19 +63,51 @@ interface GateSessionState {
   deleted: boolean;
 }
 
-const sessions = new Map<string, GateSessionState>();
-const deletedSessionIDs = new Set<string>();
-const sessionGenerations = new Map<string, number>();
+type BootstrapCommand = ReturnType<typeof readBootstrapGateCommand>;
+
+interface GateRuntime {
+  sessions: Map<string, GateSessionState>;
+  deleted: Set<string>;
+  generations: Map<string, number>;
+  bootstrapPending: BootstrapCommand;
+  bootstrapCaptured: boolean;
+  seen: Set<string>;
+  seenPrompts: Set<string>;
+}
+
+// OpenCode V2 evaluates a plugin once per location/host, so the same module can
+// run several times in one process. Keep the gate's mutable state on globalThis
+// so every instance shares one session registry and one retry budget; each
+// instance still registers its own location-scoped `/gate` command and its own
+// event subscription, and the shared `busy` flag serializes evaluations.
+const RUNTIME_KEY = Symbol.for('opencode.completion-gate.runtime.v2');
+
+function runtime(): GateRuntime {
+  const store = globalThis as unknown as Record<symbol, GateRuntime | undefined>;
+  let rt = store[RUNTIME_KEY];
+  if (!rt) {
+    rt = {
+      sessions: new Map(),
+      deleted: new Set(),
+      generations: new Map(),
+      bootstrapPending: null,
+      bootstrapCaptured: false,
+      seen: new Set(),
+      seenPrompts: new Set(),
+    };
+    store[RUNTIME_KEY] = rt;
+  }
+  return rt;
+}
 
 function getSessionGeneration(sessionID: string): number {
-  return sessionGenerations.get(sessionID) ?? 0;
+  return runtime().generations.get(sessionID) ?? 0;
 }
 
 function advanceSessionGeneration(sessionID: string): void {
-  sessionGenerations.set(sessionID, getSessionGeneration(sessionID) + 1);
+  const rt = runtime();
+  rt.generations.set(sessionID, (rt.generations.get(sessionID) ?? 0) + 1);
 }
-
-type SessionMetadata = { id?: unknown; directory?: unknown; parentID?: unknown };
 
 function createGateSessionState(sessionID: string, directory: string): GateSessionState {
   return {
@@ -99,21 +124,42 @@ function createGateSessionState(sessionID: string, directory: string): GateSessi
   };
 }
 
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/** Minimal structural view of the V2 event stream we consume. */
+interface GateEvent {
+  type?: unknown;
+  data?: {
+    sessionID?: unknown;
+    parentID?: unknown;
+    location?: { directory?: unknown };
+  };
+}
+
 async function getOrRegisterSession(
-  client: PluginClient,
+  ctx: GateContext,
   sessionID: string
 ): Promise<GateSessionState | null> {
-  const existing = sessions.get(sessionID);
+  const rt = runtime();
+  const existing = rt.sessions.get(sessionID);
   if (existing) return existing.deleted ? null : existing;
 
   const lookupSessionID = sessionID;
   const lookupGeneration = getSessionGeneration(lookupSessionID);
 
   try {
-    const info = unwrapSdk<SessionMetadata>(
-      await client.session.get({ path: { id: lookupSessionID } })
-    );
-    const validated = validateTopLevelSessionMetadata(info, lookupSessionID);
+    const info = (await ctx.session.get({ sessionID: lookupSessionID })) as {
+      id?: unknown;
+      parentID?: unknown;
+      location?: { directory?: unknown };
+    };
+    const validated = validateTopLevelSessionMetadata({
+      id: info?.id,
+      directory: info?.location?.directory,
+      parentID: info?.parentID,
+    });
     if (!validated) {
       logDiag(
         `lazy registration rejected session ${lookupSessionID}: invalid top-level session metadata`
@@ -121,7 +167,7 @@ async function getOrRegisterSession(
       return null;
     }
     if (
-      deletedSessionIDs.has(lookupSessionID) ||
+      rt.deleted.has(lookupSessionID) ||
       getSessionGeneration(lookupSessionID) !== lookupGeneration
     ) {
       logDiag(
@@ -131,7 +177,7 @@ async function getOrRegisterSession(
     }
 
     const state = createGateSessionState(validated.sessionID, validated.directory);
-    sessions.set(state.sessionID, state);
+    rt.sessions.set(state.sessionID, state);
     logDiag(`lazily registered session ${state.sessionID} (${state.directory})`);
     return state;
   } catch (err) {
@@ -140,40 +186,39 @@ async function getOrRegisterSession(
   }
 }
 
-async function safeToast(
-  client: PluginClient,
-  message: string,
-  variant: 'info' | 'error' = 'info'
-): Promise<void> {
+/**
+ * Surface a notice to the user as a synthetic session message. V2 server plugins
+ * have no toast surface (`ui.toast` only exists for TUI plugins), so the previous
+ * `client.tui.showToast` feedback becomes a transcript message plus a diag line.
+ */
+async function notify(ctx: GateContext, state: GateSessionState, message: string): Promise<void> {
+  logDiag(`notify ${state.sessionID}: ${message}`);
   try {
-    await client.tui.showToast({ body: { variant, message } });
-  } catch {
-    // Ignore — TUI may not be available (e.g. headless mode). State is
-    // already mutated and diag logging covers observability.
+    await ctx.session.synthetic({ sessionID: state.sessionID, text: message });
+  } catch (err) {
+    logDiag(`notify failed: ${describeSdkError(err)}`);
   }
 }
 
-function clearParts(output: HookOutput): void {
-  // Toast-only /gate: leave nothing in the chat transcript or model payload.
-  // Mutating in place preserves the hook's output object identity.
-  if (Array.isArray(output?.parts)) output.parts.length = 0;
+/**
+ * Drive the agent loop by submitting a prompt. Used for failure evidence and the
+ * success notice: unlike `ctx.session.synthetic`, `ctx.session.prompt` is the
+ * direct successor of V1 `promptAsync` and guarantees the model runs a turn.
+ * The injected text is marked with MARKER so the prompt hook recognises it and
+ * does not treat it as a genuine user message that resets the retry budget.
+ */
+async function injectPrompt(ctx: GateContext, sessionID: string, text: string): Promise<void> {
+  try {
+    await ctx.session.prompt({ sessionID, text });
+  } catch (err) {
+    logDiag(`prompt injection error: ${describeSdkError(err)}`);
+  }
 }
-
-// Suppress the agent turn after a slash command. OpenCode unconditionally
-// dispatches an LLM turn after every slash command — empty parts do NOT
-// prevent it, and an empty turn right after real work can make the model
-// re-emit the previous turn's tool calls. There is no supported skip flag
-// (anomalyco/opencode#28292; fix PR anomalyco/opencode#46579 is open), so the
-// only working mechanism today is throwing out of `command.execute.before`,
-// which aborts the command flow and keeps the model idle. The toast carries
-// the confirmation. Set to false to fall back to parts-clearing only (the
-// turn still fires — not recommended).
-const ABORT_COMMAND_TURN = true;
 
 type ToggleKind = 'enabled' | 'disabled' | 'status' | 'usage';
 
 async function applyToggle(
-  client: PluginClient,
+  ctx: GateContext,
   state: GateSessionState,
   rawArgument: string
 ): Promise<{ notice: string; kind: ToggleKind }> {
@@ -187,7 +232,7 @@ async function applyToggle(
         ? { value: state.sessionMaxRetries, source: 'session' as const }
         : { value: loaded?.config.maxRetries ?? 3, source: 'config' as const };
     const notice = `Completion gate: ${state.gateEnabled ? 'ENABLED' : 'disabled'} · retries=${state.retries} · lastOutcome=${state.lastOutcome ?? 'n/a'} · extraCommand=${state.extraCommand ? 'configured' : 'none'} · mode=${state.gateMode} · maxRetries=${cap.value} (${cap.source})`;
-    await safeToast(client, notice);
+    await notify(ctx, state, notice);
     return { notice, kind: 'status' };
   }
 
@@ -197,7 +242,7 @@ async function applyToggle(
     const parsed = parseOnlyCommand(remainder);
     if (!parsed.command || parsed.invalidRetry) {
       const notice = 'Usage: /gate --only "command" [--retries N]';
-      await safeToast(client, notice, 'error');
+      await notify(ctx, state, notice);
       return { notice, kind: 'usage' };
     }
     state.extraCommand = parsed.command;
@@ -211,7 +256,7 @@ async function applyToggle(
       parsed.maxRetries !== undefined
         ? `Completion gate armed (command-only): ${parsed.command} · maxRetries=${parsed.maxRetries}`
         : `Completion gate armed (command-only): ${parsed.command}`;
-    await safeToast(client, notice);
+    await notify(ctx, state, notice);
     logDiag(
       `gate command-only custom command registered on ${state.sessionID}` +
         (parsed.maxRetries !== undefined ? ` (session maxRetries=${parsed.maxRetries})` : '')
@@ -227,7 +272,7 @@ async function applyToggle(
     state.escalated = false;
     state.lastOutcome = null;
     const notice = `Completion gate armed (combined): ${state.extraCommand}`;
-    await safeToast(client, notice);
+    await notify(ctx, state, notice);
     logDiag(`gate custom command registered on ${state.sessionID}`);
     return { notice, kind: 'enabled' };
   }
@@ -239,31 +284,31 @@ async function applyToggle(
     state.lastOutcome = null;
   }
   const notice = `Completion gate ${state.gateEnabled ? 'enabled' : 'disabled'} for this session.`;
-  await safeToast(client, notice);
+  await notify(ctx, state, notice);
   logDiag(`gate ${arg} on ${state.sessionID}`);
   return { notice, kind: state.gateEnabled ? 'enabled' : 'disabled' };
 }
 
 // Warn at enable time when there is nothing to run: without this, an enabled
 // gate on a session whose directory resolves to no config looks dead.
-async function warnIfNothingToRun(client: PluginClient, state: GateSessionState): Promise<void> {
+async function warnIfNothingToRun(ctx: GateContext, state: GateSessionState): Promise<void> {
   if (state.extraCommand) return;
   if (loadGateConfig(state.directory)) return;
   const msg = `Completion gate enabled but nothing to run: no .opencode/completion-gate.json found from ${state.directory}.`;
   logDiag(`gate on ${state.sessionID}: ${msg}`);
-  await safeToast(client, msg, 'error');
+  await notify(ctx, state, msg);
 }
 
-// Start an evaluation right away (fire-and-forget). Needed because enabling
-// via slash aborts the command turn, so no fresh idle event follows to kick
-// the gate — without this the gate would stay dormant until the next real
-// turn. Shared with the idle handler; the busy flag serializes overlaps.
-function kickGateTurnEnd(client: PluginClient, state: GateSessionState, reason: string): void {
+// Start an evaluation right away (fire-and-forget). The `/gate` command and the
+// session-created wake-up do not produce a fresh idle event, so the gate would
+// otherwise stay dormant until the next real turn. The busy flag serializes
+// overlaps with the idle handler.
+function kickGateTurnEnd(ctx: GateContext, state: GateSessionState, reason: string): void {
   if (state.deleted || !state.gateEnabled || state.busy) return;
   if (process.env.OPENCODE_GATE_DISABLED === '1') return;
   state.busy = true;
   logDiag(`gate kick on ${state.sessionID} (${reason}) — evaluation starting`);
-  runGateTurnEnd(client, state)
+  runGateTurnEnd(ctx, state)
     .catch((err: unknown) => logDiag(`gate flow error: ${describeSdkError(err)}`))
     .finally(() => {
       state.busy = false;
@@ -295,24 +340,6 @@ export async function runCommandAssertion(
     a.name,
     `${why}\n${truncateTail([r.stderr, r.stdout].filter((s) => s.trim()).join('\n---\n'))}`
   );
-}
-
-function unwrapSdk<T>(res: unknown): T {
-  if (res && typeof res === 'object' && ('data' in res || 'error' in res)) {
-    const r = res as { data?: T; error?: unknown };
-    if (r.error != null) {
-      const e = r.error;
-      throw new Error(
-        typeof e === 'string'
-          ? e
-          : e && typeof e === 'object' && 'message' in e
-            ? String(e.message)
-            : JSON.stringify(e)
-      );
-    }
-    return r.data as T;
-  }
-  return res as T;
 }
 
 export async function evaluateAssertions(
@@ -354,6 +381,61 @@ export async function evaluateAssertions(
   return results;
 }
 
+// Build a V2 reviewer-session client from the plugin context. Used by the
+// `opencode-review` assertion.
+function buildReviewClient(ctx: GateContext): ReviewSessionClient {
+  const assistantText = (
+    messages: ReadonlyArray<{
+      type?: unknown;
+      content?: ReadonlyArray<{ type?: unknown; text?: unknown }>;
+    }>
+  ): string => {
+    const out: string[] = [];
+    for (const message of messages ?? []) {
+      if (!message || message.type !== 'assistant') continue;
+      for (const content of message.content ?? []) {
+        if (content && content.type === 'text' && typeof content.text === 'string')
+          out.push(content.text);
+      }
+    }
+    return out.join('\n');
+  };
+
+  return {
+    session: {
+      create: async (input) => {
+        const created = await ctx.session.create(
+          input?.directory
+            ? { title: 'completion-gate self-review', location: { directory: input.directory } }
+            : { title: 'completion-gate self-review' }
+        );
+        return { id: created?.id };
+      },
+      prompt: async ({ sessionID, text, agent }) => {
+        // A bad agent must fail the assertion (actionable evidence), not silently
+        // degrade to the session default — matches V1 behavior.
+        if (agent) await ctx.session.switchAgent({ sessionID, agent });
+        await ctx.session.prompt({ sessionID, text });
+        await ctx.session.wait({ sessionID });
+      },
+      context: async ({ sessionID }) => {
+        const messages = (await ctx.session.context({ sessionID })) as ReadonlyArray<{
+          type?: unknown;
+          content?: ReadonlyArray<{ type?: unknown; text?: unknown }>;
+        }>;
+        return assistantText(messages);
+      },
+      abort: async ({ sessionID }) => {
+        try {
+          await ctx.session.interrupt({ sessionID });
+        } catch {
+          /* best effort */
+        }
+      },
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Turn-end gate flow
 // ---------------------------------------------------------------------------
@@ -374,7 +456,7 @@ function injectFailureText(
   ].join('\n');
 }
 
-async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Promise<void> {
+async function runGateTurnEnd(ctx: GateContext, state: GateSessionState): Promise<void> {
   const isAborted = (): boolean =>
     state.deleted || !state.gateEnabled || process.env.OPENCODE_GATE_DISABLED === '1';
   if (state.lastOutcome === 'pass') {
@@ -409,7 +491,12 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
     `gate turn-end on ${state.sessionID}: ${loaded ? `config ${loaded.path}` : 'command-only without project config'} (${assertions.length} assertion(s), maxRetries=${cap.value} (${cap.source}), retries so far=${state.retries})`
   );
 
-  const results = await evaluateAssertions(assertions, projectRoot, client, isAborted);
+  const results = await evaluateAssertions(
+    assertions,
+    projectRoot,
+    buildReviewClient(ctx),
+    isAborted
+  );
   if (results === null) {
     logDiag(
       `gate turn-end ABORTED on ${state.sessionID} — gate was disabled mid-run, staying silent`
@@ -426,20 +513,11 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
       return;
     }
     state.lastOutcome = 'pass';
-    await client.session
-      .promptAsync({
-        path: { id: state.sessionID },
-        body: {
-          ...(state.currentAgent ? { agent: state.currentAgent } : {}),
-          parts: [
-            {
-              type: 'text',
-              text: `${MARKER} ✅ Completion gate passed (${results.map((r) => r.name).join(', ')}). You may report done.`,
-            },
-          ],
-        },
-      })
-      .catch((err: unknown) => logDiag(`success prompt error: ${describeSdkError(err)}`));
+    await injectPrompt(
+      ctx,
+      state.sessionID,
+      `${MARKER} ✅ Completion gate passed (${results.map((r) => r.name).join(', ')}). You may report done.`
+    );
     return;
   }
 
@@ -451,15 +529,11 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
   if (state.retries >= cap.value) {
     if (!state.escalated) {
       state.escalated = true;
-      await client.tui
-        .showToast({
-          body: {
-            variant: 'error',
-            message: `→ Completion gate "${last.name}" still failing after ${cap.value} retries — manual attention needed`,
-            duration: 15000,
-          },
-        })
-        .catch(() => {});
+      await notify(
+        ctx,
+        state,
+        `→ Completion gate "${last.name}" still failing after ${cap.value} retries — manual attention needed`
+      );
       logDiag(
         `gate ESCALATED on ${state.sessionID}: "${last.name}" still failing after ${cap.value} retries — manual attention needed`
       );
@@ -471,186 +545,271 @@ async function runGateTurnEnd(client: PluginClient, state: GateSessionState): Pr
   logDiag(
     `gate FAILED on ${state.sessionID}: "${last.name}" — retry ${state.retries}/${cap.value}, injecting fix request`
   );
-  await client.session
-    .promptAsync({
-      path: { id: state.sessionID },
-      body: {
-        ...(state.currentAgent ? { agent: state.currentAgent } : {}),
-        parts: [{ type: 'text', text: injectFailureText(state, last, cap.value) }],
-      },
-    })
-    .catch((err: unknown) => logDiag(`retry prompt error: ${describeSdkError(err)}`));
+  await injectPrompt(ctx, state.sessionID, injectFailureText(state, last, cap.value));
 }
 
-const plugin: Plugin = async ({ client }) => {
-  // Capture launcher settings before the first session event. Launchers can
-  // clean up their environment after starting OpenCode but before the host
-  // emits session.created.
-  let pendingBootstrap = readBootstrapGateCommand();
-  if (pendingBootstrap) consumeBootstrapGateCommand();
+// ---------------------------------------------------------------------------
+// Prompt hook: retry-budget reset + legacy in-band directives
+// ---------------------------------------------------------------------------
 
-  return {
-    event: async ({ event }) => {
-      try {
-        if (event.type === 'session.deleted') {
-          const info = (event.properties as { info?: unknown } | undefined)?.info;
-          const deletedInfo =
-            info && typeof info === 'object' ? (info as { id?: unknown }) : undefined;
-          if (typeof deletedInfo?.id === 'string' && deletedInfo.id.trim() !== '') {
-            const sessionID = deletedInfo.id;
-            deletedSessionIDs.add(sessionID);
-            advanceSessionGeneration(sessionID);
-            const state = sessions.get(sessionID);
-            if (state) {
-              state.deleted = true;
-              state.gateEnabled = false;
+interface PromptHookEvent {
+  sessionID?: unknown;
+  messageID?: unknown;
+  prompt?: { text?: string };
+}
+
+async function handlePrompt(ctx: GateContext, event: PromptHookEvent): Promise<void> {
+  const sessionID = asString(event?.sessionID);
+  if (!sessionID) return;
+  // The prompt hook is registered once per plugin instance and every instance
+  // runs it, so a single message would be handled N times. Dedupe by message id.
+  const messageID = asString(event?.messageID);
+  if (messageID) {
+    const rt = runtime();
+    if (rt.seenPrompts.has(messageID)) return;
+    rt.seenPrompts.add(messageID);
+    if (rt.seenPrompts.size > 5000) rt.seenPrompts.clear();
+  }
+  const state = runtime().sessions.get(sessionID);
+  if (!state || state.deleted) return;
+  const text: string = event?.prompt?.text ?? '';
+
+  if (text.trimStart().startsWith(INTERNAL_MARKER)) {
+    const lines = text.split(/\r?\n/);
+    const directive = lines.shift()?.trim() ?? '';
+    const argument = directive.slice(INTERNAL_MARKER.length).trim();
+    if (/^--only\s+/i.test(argument)) {
+      await applyToggle(ctx, state, argument);
+      const remainder = lines.join('\n').replace(/^\n+/, '');
+      if (event.prompt) event.prompt.text = remainder;
+    }
+    return;
+  }
+
+  if (!text.trimStart().startsWith(MARKER)) {
+    // genuine user message → reset the fix-cycle budget
+    state.retries = 0;
+    state.escalated = false;
+    state.lastOutcome = null;
+    return;
+  }
+
+  const t = TOGGLE_RE.exec(text.trim());
+  const argument = (t?.[1] ?? '').trim();
+  if (!t || INJECTED_FAILURE_RE.test(argument) || INJECTED_SUCCESS_RE.test(argument)) return; // leave plugin-injected notices untouched
+
+  const applied = await applyToggle(ctx, state, argument);
+  if (applied.kind === 'enabled') await warnIfNothingToRun(ctx, state);
+  // The prompt hook cannot suppress the turn the way V1's command hook could, so
+  // constrain it instead: an anchor stops the model from re-emitting previous
+  // tool calls on what would otherwise be a near-empty message. Prefer the /gate
+  // slash command (fully plugin-owned, no model turn) for silent toggling.
+  if (event.prompt)
+    event.prompt.text = `${applied.notice} (Plugin-handled; acknowledge briefly, take no other action, call no tools.)`;
+}
+
+// ---------------------------------------------------------------------------
+// Event stream
+// ---------------------------------------------------------------------------
+
+/** Arm the gate from a launcher bootstrap exactly once, on the first session. */
+async function armBootstrapIfPending(ctx: GateContext, state: GateSessionState): Promise<void> {
+  const rt = runtime();
+  // Fall back to a fresh env read for launchers that set the vars slightly
+  // after plugin start.
+  const bootstrap = rt.bootstrapPending ?? readBootstrapGateCommand();
+  rt.bootstrapPending = null;
+  if (!bootstrap) return;
+  consumeBootstrapGateCommand();
+  state.extraCommand = bootstrap.command;
+  state.gateMode = bootstrap.mode;
+  state.sessionMaxRetries =
+    bootstrap.mode === 'command-only' && bootstrap.maxRetries !== undefined
+      ? bootstrap.maxRetries
+      : null;
+  state.gateEnabled = true;
+  state.retries = 0;
+  state.escalated = false;
+  state.lastOutcome = null;
+  logDiag(
+    `gate bootstrap ${bootstrap.mode} custom command registered on ${state.sessionID}` +
+      (state.sessionMaxRetries !== null ? ` (session maxRetries=${state.sessionMaxRetries})` : '')
+  );
+  await notify(
+    ctx,
+    state,
+    state.sessionMaxRetries !== null
+      ? `Completion gate armed (${bootstrap.mode}): ${bootstrap.command} · maxRetries=${state.sessionMaxRetries}`
+      : `Completion gate armed (${bootstrap.mode}): ${bootstrap.command}`
+  );
+}
+
+async function handleEvent(ctx: GateContext, event: GateEvent): Promise<void> {
+  const type = typeof event.type === 'string' ? event.type : '';
+  const rt = runtime();
+
+  if (type === 'session.deleted') {
+    const sessionID = asString(event.data?.sessionID);
+    if (!sessionID) return;
+    rt.deleted.add(sessionID);
+    advanceSessionGeneration(sessionID);
+    const state = rt.sessions.get(sessionID);
+    if (state) {
+      state.deleted = true;
+      state.gateEnabled = false;
+    }
+    rt.sessions.delete(sessionID);
+    return;
+  }
+
+  if (type === 'session.created') {
+    const validated = validateTopLevelSessionMetadata({
+      id: event.data?.sessionID,
+      directory: event.data?.location?.directory,
+      parentID: event.data?.parentID,
+    });
+    if (!validated) {
+      logDiag('session.created ignored: invalid top-level session metadata');
+      return;
+    }
+    // The event reaches every plugin instance; register once, idempotently.
+    const existing = rt.sessions.get(validated.sessionID);
+    if (existing && !existing.deleted) return;
+    rt.deleted.delete(validated.sessionID);
+    advanceSessionGeneration(validated.sessionID);
+    const created = createGateSessionState(validated.sessionID, validated.directory);
+    rt.sessions.set(created.sessionID, created);
+    logDiag(`registered session ${created.sessionID} (${created.directory})`);
+
+    // Out-of-band arming (message-only, no chat): consume a launcher-provided
+    // bootstrap command exactly once so only the startup session arms.
+    await armBootstrapIfPending(ctx, created);
+    return;
+  }
+
+  // A turn ends when its execution finishes. This core does not emit
+  // session.idle; `session.execution.succeeded` is the observed turn-end signal
+  // (keep session.idle too for forward-compatibility).
+  if (type === 'session.idle' || type === 'session.execution.succeeded') {
+    const sessionID = asString(event.data?.sessionID);
+    if (!sessionID) return;
+    let state = rt.sessions.get(sessionID);
+    if (!state || state.deleted) {
+      // The subscription can miss the initial session.created (e.g. a private
+      // server that creates its first session before plugins finish loading),
+      // so register lazily on first turn end too.
+      state = (await getOrRegisterSession(ctx, sessionID)) ?? undefined;
+      if (!state) return;
+      await armBootstrapIfPending(ctx, state);
+    }
+    if (!state.gateEnabled || state.busy) return;
+    if (process.env.OPENCODE_GATE_DISABLED === '1') return;
+    logDiag(`session ${sessionID} went idle — gate turn-end starting`);
+    kickGateTurnEnd(ctx, state, 'idle');
+    return;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin definition
+// ---------------------------------------------------------------------------
+
+const plugin = Plugin.define({
+  id: 'opencode.completion-gate',
+  async setup(ctx) {
+    // Capture launcher settings before the first session event. Launchers can
+    // clean up their environment after starting OpenCode but before the host
+    // emits session.created. Captured once per process, shared across the
+    // plugin instances OpenCode loads per location.
+    const rt = runtime();
+    if (!rt.bootstrapCaptured) {
+      rt.bootstrapPending = readBootstrapGateCommand();
+      rt.bootstrapCaptured = true;
+      if (rt.bootstrapPending) consumeBootstrapGateCommand();
+      logDiag(
+        `completion-gate: first setup (bootstrap=${rt.bootstrapPending ? rt.bootstrapPending.mode : 'none'})`
+      );
+    }
+
+    // Own the `/gate` command outright (V2 has no global command.execute.before).
+    const commandReg = await ctx.command.transform((editor) => {
+      editor.add({
+        name: 'gate',
+        description:
+          'Control the completion gate for this session (/gate [on|off|status|command] or /gate --only command)',
+        execute: async ({ sessionID, prompt }) => {
+          try {
+            const state = await getOrRegisterSession(ctx, sessionID);
+            if (!state || state.deleted) return;
+            // The composed command prompt may carry the command token; keep only
+            // the arguments.
+            const argument = (prompt?.text ?? '')
+              .trim()
+              .replace(/^\/gate\b/i, '')
+              .trim();
+            const applied = await applyToggle(ctx, state, argument);
+            if (applied.kind === 'enabled') {
+              await warnIfNothingToRun(ctx, state);
+              kickGateTurnEnd(ctx, state, 'enabled via /gate');
             }
-            sessions.delete(sessionID);
+          } catch (err) {
+            logDiag(`gate command error: ${describeSdkError(err)}`);
           }
-          return;
-        }
-        if (event.type === 'session.created') {
-          const info = (event.properties as { info?: unknown }).info;
-          const validated = validateTopLevelSessionMetadata(info);
-          if (!validated) {
-            logDiag('session.created ignored: invalid top-level session metadata');
-            return;
-          }
-          deletedSessionIDs.delete(validated.sessionID);
-          advanceSessionGeneration(validated.sessionID);
-          const created = createGateSessionState(validated.sessionID, validated.directory);
-          sessions.set(created.sessionID, created);
-          logDiag(`registered session ${created.sessionID} (${created.directory})`);
-          // Out-of-band arming (toast-only, no chat): consume a launcher-provided
-          // bootstrap command exactly once so only the startup session arms.
-          const bootstrap = pendingBootstrap ?? readBootstrapGateCommand();
-          pendingBootstrap = null;
-          if (bootstrap) {
-            consumeBootstrapGateCommand();
-            created.extraCommand = bootstrap.command;
-            created.gateMode = bootstrap.mode;
-            created.sessionMaxRetries =
-              bootstrap.mode === 'command-only' && bootstrap.maxRetries !== undefined
-                ? bootstrap.maxRetries
-                : null;
-            created.gateEnabled = true;
-            created.retries = 0;
-            created.escalated = false;
-            created.lastOutcome = null;
-            logDiag(
-              `gate bootstrap ${bootstrap.mode} custom command registered on ${created.sessionID}` +
-                (created.sessionMaxRetries !== null
-                  ? ` (session maxRetries=${created.sessionMaxRetries})`
-                  : '')
-            );
-            await client.tui
-              .showToast({
-                body: {
-                  variant: 'info',
-                  message:
-                    created.sessionMaxRetries !== null
-                      ? `Completion gate armed (${bootstrap.mode}): ${bootstrap.command} · maxRetries=${created.sessionMaxRetries}`
-                      : `Completion gate armed (${bootstrap.mode}): ${bootstrap.command}`,
-                },
-              })
-              .catch(() => {});
-          }
-        }
-        if (event.type === 'session.status') {
-          const props = event.properties as {
-            sessionID?: unknown;
-            status?: { type?: unknown };
-          };
-          if (typeof props.sessionID !== 'string') return;
-          const state = sessions.get(props.sessionID);
-          if (!state || !state.gateEnabled || state.busy) return;
-          if (props.status?.type !== 'idle') return;
-          if (process.env.OPENCODE_GATE_DISABLED === '1') return;
-          logDiag(`session ${props.sessionID} went idle — gate turn-end starting`);
-          kickGateTurnEnd(client, state, 'idle');
-          return;
-        }
-      } catch (err) {
-        logDiag(`event error: ${err}`);
-      }
-    },
+        },
+      });
+    });
 
-    'command.execute.before': async (
-      { command, sessionID, arguments: commandArguments },
-      output
-    ) => {
-      let applied: { notice: string; kind: ToggleKind } | null = null;
+    // Prompt hook: reset the fix-cycle budget on genuine user messages and keep
+    // honoring the legacy [completion-gate-internal] --only directive.
+    const hookReg = await ctx.session.hook('prompt', async (event) => {
       try {
-        if (command !== 'gate') return;
-        const state = await getOrRegisterSession(client, sessionID);
-        if (!state || state.deleted) return;
-        applied = await applyToggle(client, state, commandArguments);
-        // Forward-compatible: anomalyco/opencode#46579 adds output.noReply to
-        // skip the agent turn. Unreleased in 1.18.x — ignored until then.
-        (output as HookOutput).noReply = true;
-        clearParts(output as HookOutput);
-        if (applied.kind === 'enabled') {
-          await warnIfNothingToRun(client, state);
-          kickGateTurnEnd(client, state, 'enabled via /gate');
-        }
+        await handlePrompt(ctx, event as unknown as PromptHookEvent);
       } catch (err) {
-        logDiag(`command.execute.before error: ${err}`);
+        logDiag(`prompt hook error: ${describeSdkError(err)}`);
       }
-      // Throw OUTSIDE the try/catch so our own handler cannot swallow it:
-      // aborting the command flow is what keeps the model idle (no LLM turn).
-      if (applied !== null && ABORT_COMMAND_TURN) {
-        logDiag(`gate command handled on ${sessionID} — aborting turn (sentinel)`);
-        throw new Error(applied.notice);
-      }
-    },
+    });
 
-    'chat.message': async ({ sessionID, agent }, output) => {
+    // OpenCode loads one plugin instance per location, and every instance's
+    // subscription sees the whole server stream. Subscribe on every instance
+    // (robust against instance lifecycle), but dedupe by event id so a single
+    // event is handled once regardless of how many subscriptions receive it.
+    const controller = new AbortController();
+    void (async () => {
       try {
-        const state = sessions.get(sessionID);
-        if (!state || state.deleted) return;
-        if (typeof agent === 'string' && agent.trim() !== '') state.currentAgent = agent;
-        if (!Array.isArray(output?.parts) || output.parts.length === 0) return; // already cleared (toast-only) — nothing to do
-        const textPart = output.parts.find((p) => p?.type === 'text');
-        if (!textPart) return;
-        const text: string = textPart?.text ?? '';
-
-        if (text.trimStart().startsWith(INTERNAL_MARKER)) {
-          const lines = text.split(/\r?\n/);
-          const directive = lines.shift()?.trim() ?? '';
-          const argument = directive.slice(INTERNAL_MARKER.length).trim();
-          if (/^--only\s+/i.test(argument)) {
-            await applyToggle(client, state, argument);
-            const remainder = lines.join('\n').replace(/^\n+/, '');
-            if (!remainder) clearParts(output);
-            else textPart.text = remainder;
+        for await (const raw of ctx.event.subscribe({ signal: controller.signal })) {
+          try {
+            const evt = raw as unknown as GateEvent & { id?: unknown };
+            const type = typeof evt.type === 'string' ? evt.type : '';
+            if (
+              type !== 'session.created' &&
+              type !== 'session.deleted' &&
+              type !== 'session.idle' &&
+              type !== 'session.execution.succeeded'
+            )
+              continue;
+            const id = asString(evt.id);
+            if (id) {
+              if (rt.seen.has(id)) continue;
+              rt.seen.add(id);
+              if (rt.seen.size > 5000) rt.seen.clear();
+            }
+            await handleEvent(ctx, evt);
+          } catch (err) {
+            logDiag(`event error: ${describeSdkError(err)}`);
           }
-          return;
         }
-
-        if (!text.trimStart().startsWith(MARKER)) {
-          // genuine user message → reset the fix-cycle budget
-          state.retries = 0;
-          state.escalated = false;
-          state.lastOutcome = null;
-          return;
-        }
-
-        const t = TOGGLE_RE.exec(text.trim());
-        const argument = (t?.[1] ?? '').trim();
-        if (!t || INJECTED_FAILURE_RE.test(argument) || INJECTED_SUCCESS_RE.test(argument)) return; // leave plugin-injected notices untouched
-        const applied = await applyToggle(client, state, argument);
-        if (applied.kind === 'enabled') await warnIfNothingToRun(client, state);
-        // Throwing here does NOT abort the turn (the host silently catches
-        // chat.message errors), so constrain the inevitable turn instead: an
-        // anchor stops the model from re-emitting previous tool calls on what
-        // would otherwise be a near-empty message. Prefer the /gate slash
-        // command (turn fully suppressed) for silent toggling.
-        textPart.text = `${applied.notice} (Plugin-handled; acknowledge briefly, take no other action, call no tools.)`;
       } catch (err) {
-        logDiag(`chat.message error: ${err}`);
+        if (!controller.signal.aborted)
+          logDiag(`event subscription error: ${describeSdkError(err)}`);
       }
-    },
-  };
-};
+    })();
+
+    return () => {
+      controller.abort();
+      void (commandReg as { dispose?: () => unknown })?.dispose?.();
+      void (hookReg as { dispose?: () => unknown })?.dispose?.();
+    };
+  },
+});
 
 export default plugin;

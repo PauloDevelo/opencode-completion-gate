@@ -109,10 +109,17 @@ export interface TerminalBuildFailure {
   previewErrors: string[];
 }
 
+/**
+ * V2-shaped reviewer-session client. The concrete implementation is built from
+ * the OpenCode V2 plugin `Context` in `gate.ts`; the abstraction stays narrow so
+ * `runReviewAssertion` remains unit-testable without a live server.
+ */
 export interface ReviewSessionClient {
   session: {
-    create(options?: unknown): Promise<unknown>;
-    prompt(options: unknown): Promise<unknown>;
-    abort?(options: unknown): Promise<unknown>;
+    create(input?: { directory?: string }): Promise<{ id?: string }>;
+    prompt(input: { sessionID: string; text: string; agent?: string }): Promise<void>;
+    /** Concatenated assistant text produced in the session so far. */
+    context(input: { sessionID: string }): Promise<string>;
+    abort?(input: { sessionID: string }): Promise<void>;
   };
 }

@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "npm run build:bundle && npm run build:types",
-    "build:bundle": "esbuild src/plugin.ts --bundle --platform=node --format=esm --outfile=dist/plugin.js --external:fs --external:path --external:os --external:child_process --external:@opencode-ai/plugin && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:fs --external:path --external:os --external:child_process --external:@opencode-ai/plugin",
+    "build:bundle": "esbuild src/plugin.ts --bundle --platform=node --format=esm --outfile=dist/plugin.js --external:fs --external:path --external:os --external:child_process --external:@opencode/plugin && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:fs --external:path --external:os --external:child_process --external:@opencode/plugin",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -60,12 +60,11 @@
     "provenance": true
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.0.0"
+    "@opencode/plugin": ">=2.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
-    "@opencode-ai/plugin": "^1.0.223",
-    "@opencode-ai/sdk": "^1.0.223",
+    "@opencode/plugin": "^2.0.29",
     "@types/node": "^20.10.0",
     "@vitest/coverage-v8": "^1.0.0",
     "esbuild": "^0.27.2",

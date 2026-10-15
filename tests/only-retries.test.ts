@@ -1,6 +1,6 @@
-import type { TestClient, TestHooks, TestOutput, TestPlugin } from './helpers.js';
+import type { TestClient, TestHooks, TestOutput } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeTempProject } from './helpers.js';
+import { makeTempProject, startPlugin } from './helpers.js';
 
 const RETRY_ENV = 'OPENCODE_GATE_BOOTSTRAP_MAX_RETRIES';
 const B64_ENV = 'OPENCODE_GATE_BOOTSTRAP_COMMAND_B64';
@@ -19,16 +19,13 @@ function makeFakeClient() {
 
 async function freshHooks(client: TestClient) {
   vi.resetModules();
-  const mod = await import('../src/core.js');
-  const hooks = await (mod.default as TestPlugin)({ client });
-  return { hooks, mod };
+  const hooks = await startPlugin(client);
+  return { hooks };
 }
 
 async function runGateSlash(hooks: TestHooks, sessionID: string, args: string, text: string) {
   const out = { parts: [{ type: 'text', text }] } as TestOutput;
-  await expect(
-    hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out)
-  ).rejects.toThrow();
+  await hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out);
   return out;
 }
 
