@@ -1,10 +1,10 @@
 import type { GateAssertion } from '../src/core.js';
-import type { TestClient, TestHooks, TestOutput, TestPlugin } from './helpers.js';
+import type { TestClient, TestHooks, TestOutput } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeTempProject } from './helpers.js';
+import { makeTempProject, startPlugin } from './helpers.js';
 
 function cfg(assertions: GateAssertion[], extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ enabled: true, maxRetries: 3, assertions, ...extra });
@@ -23,11 +23,8 @@ function makeFakeClient() {
 async function setup(files: Record<string, string>, agent?: string) {
   vi.resetModules();
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
-  const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
-    client,
-  });
+  const hooks = await startPlugin(client);
   await hooks.event({
     event: {
       type: 'session.created',
@@ -37,27 +34,23 @@ async function setup(files: Record<string, string>, agent?: string) {
   await hooks['chat.message']({ sessionID: 's1', agent }, {
     parts: [{ type: 'text', text: '[completion-gate]' }],
   } as TestOutput);
-  return { dir, client, hooks, mod };
+  return { dir, client, hooks };
 }
 
-// Slash /gate aborts the command flow with a sentinel rejection (no LLM
-// turn) AFTER arming the gate — helpers swallow it and keep going.
+// Slash /gate is fully handled by the plugin-owned command: it arms/reports
+// and emits a synthetic notice. V2 no longer aborts the command flow (there is
+// no model turn to suppress), so the helper simply invokes it.
 async function runGateSlash(hooks: TestHooks, sessionID: string, args: string, text: string) {
   const out = { parts: [{ type: 'text', text }] } as TestOutput;
-  await hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out).catch(
-    () => {}
-  );
+  await hooks['command.execute.before']({ command: 'gate', sessionID, arguments: args }, out);
   return out;
 }
 
 async function setupWithSlashCommand(files: Record<string, string>) {
   vi.resetModules();
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
-  const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
-    client,
-  });
+  const hooks = await startPlugin(client);
   await hooks.event({
     event: {
       type: 'session.created',
@@ -65,40 +58,34 @@ async function setupWithSlashCommand(files: Record<string, string>) {
     },
   });
   await runGateSlash(hooks, 's1', '', '[completion-gate]');
-  return { dir, client, hooks, mod };
+  return { dir, client, hooks };
 }
 
 async function setupCommandOnly(files: Record<string, string>) {
   vi.resetModules();
   const dir = makeTempProject(files);
-  const mod = await import('../src/core.js');
   const client = makeFakeClient();
-  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
-    client,
-  });
+  const hooks = await startPlugin(client);
   await hooks.event({
     event: {
       type: 'session.created',
       properties: { info: { id: 's1', directory: dir, parentID: undefined } },
     },
   });
-  return { dir, client, hooks, mod };
+  return { dir, client, hooks };
 }
 
 async function setupResumedWithSlashCommand(files: Record<string, string>) {
   vi.resetModules();
   const dir = makeTempProject({ '.opencode/completion-gate.json': Object.values(files)[0] });
-  const mod = await import('../src/core.js');
   const client = makeFakeClient();
   client.session.get.mockResolvedValue({
     data: { id: 'resumed', directory: dir, parentID: undefined },
     error: undefined,
   });
-  const hooks = await (mod.default as (input: { client: TestClient }) => Promise<TestHooks>)({
-    client,
-  });
+  const hooks = await startPlugin(client);
   const out = await runGateSlash(hooks, 'resumed', '', '[completion-gate]');
-  return { dir, client, hooks, mod, out };
+  return { dir, client, hooks, out };
 }
 
 async function fireIdle(hooks: TestHooks, sessionID = 's1') {
@@ -144,30 +131,20 @@ describe('turn-end gate flow', () => {
     expect(call.body.parts[0].text).toContain('RETRY 1/3');
   });
 
-  it('preserves the active agent when injecting retry feedback', async () => {
-    const { client, hooks } = await setup(
-      {
-        c: cfg([{ type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 }]),
+  it('evaluates at turn end when the core emits session.execution.succeeded', async () => {
+    const { client, hooks } = await setup({
+      c: cfg([{ type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 }]),
+    });
+    await hooks.event({
+      event: {
+        type: 'session.execution.succeeded',
+        properties: { sessionID: 's1' },
       },
-      'resource-translator'
-    );
-
-    await fireIdle(hooks);
-
+    });
     await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
-    expect(client.session.promptAsync.mock.calls[0][0].body.agent).toBe('resource-translator');
-  });
-
-  it('preserves the active agent when injecting a success notice', async () => {
-    const { client, hooks } = await setup(
-      { c: cfg([{ type: 'command', name: 'ok', run: OK_CMD.run, timeoutSeconds: 30 }]) },
-      'resource-translator'
+    expect(client.session.promptAsync.mock.calls[0][0].body.parts[0].text).toContain(
+      'Completion gate failed'
     );
-
-    await fireIdle(hooks);
-
-    await vi.waitFor(() => expect(client.session.promptAsync).toHaveBeenCalledTimes(1));
-    expect(client.session.promptAsync.mock.calls[0][0].body.agent).toBe('resource-translator');
   });
 
   it('slash command enables turn-end gating', async () => {
@@ -328,14 +305,13 @@ describe('turn-end gate flow', () => {
         { type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 },
       ]),
     });
-    const mod = await import('../src/core.js');
     const client = makeFakeClient();
-    let resolveLookup!: (value: TestHooks) => void;
+    let resolveLookup!: (value: unknown) => void;
     const lookup = new Promise<unknown>((resolve) => {
       resolveLookup = resolve;
     });
     client.session.get.mockReturnValue(lookup);
-    const hooks = await (mod.default as TestPlugin)({ client });
+    const hooks = await startPlugin(client);
     const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     const commandPromise = hooks['command.execute.before'](
@@ -426,13 +402,12 @@ describe('turn-end gate flow', () => {
         { type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 },
       ]),
     });
-    const mod = await import('../src/core.js');
     const client = makeFakeClient();
     client.session.get.mockResolvedValue({
       data: { id: 'child', directory: dir, parentID: 'root' },
       error: undefined,
     });
-    const hooks = await (mod.default as TestPlugin)({ client });
+    const hooks = await startPlugin(client);
     const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     await hooks['command.execute.before'](
@@ -459,13 +434,12 @@ describe('turn-end gate flow', () => {
         { type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 },
       ]),
     });
-    const mod = await import('../src/core.js');
     const client = makeFakeClient();
     client.session.get.mockResolvedValue({
       data: { id: 'malformed-parent', directory: dir, parentID },
       error: undefined,
     });
-    const hooks = await (mod.default as TestPlugin)({ client });
+    const hooks = await startPlugin(client);
     const out = { parts: [{ type: 'text', text: '[completion-gate]' }] } as TestOutput;
 
     await hooks['command.execute.before'](
@@ -485,7 +459,6 @@ describe('turn-end gate flow', () => {
       c: cfg([{ type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 }]),
     });
     client.tui.showToast.mockClear();
-    client.tui.showToast.mockClear();
     await runGateSlash(hooks, 's1', 'off', '[completion-gate] off');
     expect(client.tui.showToast).toHaveBeenCalledWith({
       body: { variant: 'info', message: 'Completion gate disabled for this session.' },
@@ -499,7 +472,7 @@ describe('turn-end gate flow', () => {
     expect(client.tui.showToast).not.toHaveBeenCalled();
   });
 
-  it('stops injecting after the retry cap and escalates via error toast once', async () => {
+  it('stops injecting after the retry cap and escalates once', async () => {
     const { client, hooks } = await setup({
       c: cfg([{ type: 'command', name: 'bad', run: BAD_CMD.run, timeoutSeconds: 30 }], {
         maxRetries: 1,
@@ -511,7 +484,6 @@ describe('turn-end gate flow', () => {
 
     await fireIdle(hooks); // cap reached → escalate
     await vi.waitFor(() => expect(client.tui.showToast).toHaveBeenCalledTimes(1));
-    expect(client.tui.showToast.mock.calls[0][0].body.variant).toBe('error');
     expect(client.tui.showToast.mock.calls[0][0].body.message).toContain('still failing');
 
     await fireIdle(hooks); // exhausted → nothing more

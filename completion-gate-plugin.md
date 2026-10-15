@@ -1,6 +1,8 @@
 # Completion Gate Plugin
 
-Per-session quality gate that blocks an agent from declaring a task "done" until configured assertions pass. Implemented in [`src/plugin.ts`](src/plugin.ts) (default-export-only entry re-exporting [`src/core.ts`](src/core.ts), built to `dist/plugin.js`); loaded via the `plugin` field in `opencode.json` (see `README.md`).
+Per-session quality gate that blocks an agent from declaring a task "done" until configured assertions pass. Implemented in [`src/gate.ts`](src/gate.ts) (the OpenCode V2 plugin definition, re-exported by [`src/plugin.ts`](src/plugin.ts) and built to `dist/plugin.js`); loaded via the `plugins` array in `opencode.json(c)` (see `README.md`).
+
+> **OpenCode V2.** This release targets the V2 plugin API (`@opencode/plugin` ≥ 2.0, `Plugin.define`). `/gate` is a plugin-owned command (`ctx.command.transform`), the gate listens to the V2 event stream (`ctx.event.subscribe`), and feedback is surfaced as **synthetic session messages** — the V2 server-plugin context has no toast surface.
 
 ## Purpose
 
@@ -22,7 +24,7 @@ Typical workflow:
 4. All pass → `✅ Completion gate passed (...)` appears once and the agent may report done.
 5. Something fails → the agent is re-prompted with the failure evidence and keeps fixing until it passes or hits the retry cap.
 
-Retry and success injections preserve the active primary agent from the gated turn. For example, a `resource-translator` session remains on `resource-translator` after completion-gate feedback instead of falling back to the default `build` agent. Only the agent identity is preserved; model/provider selection is unchanged.
+Retry and success injections are submitted to the gated session, so its active agent continues to handle the feedback. (OpenCode V2 resolves the agent server-side; the plugin no longer tracks it.)
 6. `/gate off` when you're done.
 
 ```
@@ -43,9 +45,9 @@ in `command-only` mode as the session retry override, ignored otherwise).
 The plugin captures them when it initializes, with a fallback read at
 `session.created` for launchers that set them slightly later, then consumes them
 one-shot for the first valid top-level session, enables the gate, and
-confirms with a toast carrying the command
+confirms with a synthetic session message carrying the command
 (`Completion gate armed (<mode>): <command>`, with a `· maxRetries=N` suffix
-when a session override applies) — nothing enters the chat transcript. The legacy
+when a session override applies). The legacy
 `[completion-gate-internal] --only <command>` first-line chat directive remains
 supported as a fallback (stripped from the model payload before delivery;
 only the `--only` variant is handled — a bare internal marker without `--only`
@@ -64,17 +66,15 @@ Per-command retry cap: `/gate --only "command" --retries N` (alias `--max-retrie
 
 ### How `/gate` works
 
-The slash command is handled by the plugin's `command.execute.before` hook before its markdown template reaches the model. If an existing or resumed **top-level** session has no in-memory state, the hook lazily registers it from the session metadata, then applies `/gate`, `/gate on`, `/gate off`, `/gate status`, `/gate "command"`, or `/gate --only "command"`. The hook toggles, reports, or configures the per-session state, shows a toast confirmation (`Completion gate enabled/disabled`, status, or command registration), clears the command parts, and then **aborts the command flow so the model stays idle — no LLM turn is dispatched**.
+`/gate` is registered by the plugin itself through `ctx.command.transform`, so it is an in-process command rather than a markdown template — the plugin's `execute` handler runs directly and **no model turn is dispatched**, which is why V2 needs no abort/parts-clearing trick. If an existing or resumed **top-level** session has no in-memory state, the handler lazily registers it from `ctx.session.get`, then applies `/gate`, `/gate on`, `/gate off`, `/gate status`, `/gate "command"`, or `/gate --only "command"`. It toggles, reports, or configures the per-session state and emits a synthetic session message (`Completion gate enabled/disabled`, status, or command registration).
 
-Why the abort: OpenCode unconditionally runs an agent turn after every slash command. Empty parts do *not* suppress it, and an empty turn right after real work can make the model re-emit the previous turn's tool calls. There is no supported skip flag on the stable channel ([upstream issue](https://github.com/anomalyco/opencode/issues/28292); fix PR [anomalyco/opencode#46579](https://github.com/anomalyco/opencode/pull/46579) is open but unmerged), so the plugin throws a sentinel error carrying the confirmation text out of `command.execute.before` — the documented workaround — after arming the gate and showing the toast. The hook also sets `output.noReply = true` (forward-compatible: harmless no-op today, honored once the upstream PR lands). To fall back to parts-clearing only, set `ABORT_COMMAND_TURN = false` in `src/core.ts` (the turn will fire again — not recommended).
+Because the command produces no fresh idle event, enabling via `/gate` **kicks an immediate evaluation** in the background — the gate validates right away instead of staying dormant until your next real turn (the `busy` flag serializes this with later idle evaluations). If the session directory resolves to no config and no session command is set, enabling also emits a `…nothing to run: no .opencode/completion-gate.json found from <dir>` message so a mis-scoped session is obvious instead of silently idle — check `gate-diag.log` for the exact lookup start directory.
 
-Because the aborted turn produces no fresh idle event, enabling via `/gate` **kicks an immediate evaluation** in the background — the gate validates right away instead of staying dormant until your next real turn (the `busy` flag serializes this with later idle evaluations). If the session directory resolves to no config and no session command is set, enabling also shows an error toast (`…nothing to run: no .opencode/completion-gate.json found from <dir>`) so a mis-scoped session is obvious instead of silently idle — check `gate-diag.log` for the exact lookup start directory.
-
-Direct messages starting with `[completion-gate]` remain supported through the `chat.message` hook, but throwing there does *not* abort the turn (the host swallows it), so the hook swaps in a one-line anchor (`…acknowledge briefly, take no other action, call no tools`) instead of clearing — the model wakes but is constrained to a short ack with no tool calls. Prefer the `/gate` slash command for fully silent toggling. Injected retry/success messages are left untouched.
+The gate reacts to the V2 event stream (`ctx.event.subscribe`): it registers sessions on `session.created`, drops them on `session.deleted`, and runs an evaluation when a session's execution finishes (`session.execution.succeeded`; `session.idle` is also handled for forward-compatibility). Registration is lazy on first sight, so a session whose `session.created` was missed (e.g. a session created before plugins finished loading) still arms and evaluates. A `ctx.session.hook("prompt", …)` handler resets the fix-cycle budget on a genuine user message and keeps honoring the legacy `[completion-gate-internal] --only <command>` directive; injected retry/success messages are left untouched.
 
 Deleted or unavailable sessions, sessions with malformed metadata, and subagent sessions are left unchanged. A restarted server still leaves the lazily registered session disabled; the user must invoke `/gate` again to enable gating.
 
-> Note: because injected retry/success notes also carry the marker, direct messages matching `[completion-gate] on`, `[completion-gate] off`, `[completion-gate] status`, `[completion-gate] <command>`, or `[completion-gate] --only <command>` are handled as gate commands; generated retry/success/failure messages are left untouched. All `/gate` confirmations are toast-only and ephemeral — re-run `/gate status` if you miss one. In headless mode (no TUI) the toast is skipped safely; the toggle still applies and `gate-diag.log` records it.
+> Note: because injected retry/success notes also carry the marker, direct messages matching `[completion-gate] on`, `[completion-gate] off`, `[completion-gate] status`, `[completion-gate] <command>`, or `[completion-gate] --only <command>` are handled as gate commands; generated retry/success/failure messages are left untouched. `/gate` confirmations are synthetic session messages — re-run `/gate status` if you miss one, or read `gate-diag.log`.
 
 ## Configuration
 
@@ -182,7 +182,7 @@ Requires `az` installed **and logged in** (`az login`) with access to the organi
 
 ### `opencode-review`
 
-Runs the reviewer through an **isolated reviewer session** on the same opencode server (created via the plugin SDK client inside the gated repo's directory) and prompts it with `agent: <agent>`. The reply is parsed for a final `VERDICT: PASS` / `VERDICT: FAIL` line; a missing verdict counts as failure (captured review text included as evidence).
+Runs the reviewer through an **isolated reviewer session** on the same opencode server (created via the V2 plugin context — `ctx.session.create` — in the gated repo's directory, then `ctx.session.prompt` with the configured agent, and the reply read back from `ctx.session.context`). The reply is parsed for a final `VERDICT: PASS` / `VERDICT: FAIL` line; a missing verdict counts as failure (captured review text included as evidence).
 
 ```json
 {
@@ -204,7 +204,7 @@ Notes:
 1. Gate runs at every idle of an enabled primary session.
 2. Failure → the agent is re-prompted with: *✖ Completion gate failed — "\<name\>". Fix these issues, then finish again.* followed by the evidence in a code block and a `(RETRY n/maxRetries)` counter.
 3. The agent wakes, fixes, goes idle → the gate re-runs automatically.
-4. Retry cap reached → no more injections; an error toast is shown (*still failing after N retries — manual attention needed*) and the event is logged to diagnostics.
+4. Retry cap reached → no more injections; a synthetic message is shown (*still failing after N retries — manual attention needed*) and the event is logged to diagnostics.
 5. Counters reset when you send your next genuine message (or when you re-enable via `/gate`) — start a fresh fix cycle by simply talking to the agent again.
 
 A passing gate posts its success note **once** per consecutive-passing streak, and subsequent idles **skip evaluation entirely** (logged as `gate turn-end skipped ... already green this streak`) — no wasted build/test re-runs while you keep working past a green gate. Your next genuine message resets `lastOutcome`, so the next idle starts a fresh full validation.
@@ -241,7 +241,7 @@ Also logged: session registrations, successful lazy registration, skipped subage
 
 | Symptom | Check |
 |---|---|
-| Gate never fires | `/gate status` — is it enabled? If enabling showed a `…nothing to run` error toast, the session directory resolves to no config: check `gate-diag.log` for the lookup start directory. For an existing/resumed session, `/gate status` or `/gate on` also triggers lazy registration when in-memory state is missing. Then check `gate-diag.log` for successful registration, a skipped subagent, rejected metadata, or a lookup failure. Does `<project-root>/.opencode/completion-gate.json` exist with `"enabled": true` and ≥1 assertion? Are you in the main session (not a subagent)? |
+| Gate never fires | `/gate status` — is it enabled? If enabling reported `…nothing to run`, the session directory resolves to no config: check `gate-diag.log` for the lookup start directory. For an existing/resumed session, `/gate status` or `/gate on` also triggers lazy registration when in-memory state is missing. Then check `gate-diag.log` for successful registration, a skipped subagent, rejected metadata, or a lookup failure. Does `<project-root>/.opencode/completion-gate.json` exist with `"enabled": true` and ≥1 assertion? Are you in the main session (not a subagent)? |
 | Agent cannot read `.opencode/completion-gate.json` | If the project's `.opencode/` is a symlink/junction (e.g. worktree setups), opencode resolves it before permission checks — the read is evaluated against `permission.external_directory` using the canonical path, so the project's `opencode.json` must allow that canonical path. |
 | Toggle does nothing / odd behavior | For a resumed session, run `/gate status` first to trigger or confirm lazy registration, then inspect `~/.config/opencode/gate-diag.log` (see [Diagnostics log](#diagnostics-log)) for successful registration, a skipped subagent, rejected metadata, or a lookup failure. |
 | Gate keeps re-running while waiting for reviewers/comments on a PR | Those are human-review policies; set `"ignoreHumanPolicies": true` on the `ado-pr` assertion (see [ado-pr](#ado-pr)) or resolve them manually. |

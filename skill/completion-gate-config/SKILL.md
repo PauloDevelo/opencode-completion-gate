@@ -4,10 +4,10 @@ description: Create or maintain a project's .opencode/completion-gate.json — t
 license: MIT
 compatibility: opencode
 metadata:
-  version: "1.0.1"
+  version: "2.0.0"
   author: "pto"
   tags: ["opencode", "plugin", "quality-gate", "completion-gate", "ci"]
-  updated: "2026-08-24"
+  updated: "2026-10-15"
 ---
 
 # Completion Gate Configuration
@@ -41,7 +41,7 @@ The gate is **off by default per session** — the user enables it with `/gate`.
 | Field | Default | Description |
 |---|---|---|
 | `enabled` | `true` | Only `false` disables the gate. **A missing `enabled` still gates** — but always write it explicitly for clarity. |
-| `maxRetries` | `3` | Auto-fix injections per fix cycle before the gate escalates (error toast, no more retries until the user's next message). |
+| `maxRetries` | `3` | Auto-fix injections per fix cycle before the gate escalates (a message is shown, no more retries until the user's next message). |
 | `assertions` | *(required)* | Non-empty array. **Empty array or missing = gate silently off.** |
 
 ### Assertion fields by type
@@ -110,7 +110,7 @@ Automated `queued` and `running` statuses are polled. Automated `rejected`, `bro
 
 ### `opencode-review`
 
-Spawns an isolated reviewer session (same opencode server, gating disabled so it can't recurse) and parses the reply for a final `VERDICT: PASS` / `VERDICT: FAIL` line. A missing verdict counts as failure.
+Spawns an isolated reviewer session (same opencode server; newly created sessions start gate-disabled, so it can't recurse) and parses the reply for a final `VERDICT: PASS` / `VERDICT: FAIL` line. A missing verdict counts as failure.
 
 ```json
 { "type": "opencode-review", "name": "self-review",

@@ -12,16 +12,18 @@ Per-session quality gate that blocks an agent from declaring a task "done" until
 npm install opencode-completion-gate
 ```
 
-Add the plugin to your OpenCode configuration:
+Add the plugin to your OpenCode configuration (V2):
 
 **opencode.json:**
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-completion-gate"]
+  "plugins": ["opencode-completion-gate"]
 }
 ```
+
+> Requires OpenCode V2 (`@opencode/plugin` ≥ 2.0). For OpenCode V1, use `opencode-completion-gate@1.x` and the `plugin` field.
 
 ## Quick start
 

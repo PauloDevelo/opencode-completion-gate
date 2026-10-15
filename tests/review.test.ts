@@ -20,104 +20,83 @@ const a: ReviewAssertion = {
 };
 
 interface FakeClientOptions {
-  createResult?: unknown; // resolved value of session.create
+  createResult?: { id?: string };
   createThrows?: unknown;
-  promptText?: string;
-  promptParts?: unknown[];
-  promptResult?: unknown;
   promptError?: unknown;
   promptNeverResolves?: boolean;
+  contextText?: string;
   abort?: boolean; // whether client.session.abort exists
 }
 
 interface PromptRequest {
-  path: { id: string };
-  body: { agent?: string; parts: Array<{ type: 'text'; text: string }> };
+  sessionID: string;
+  text: string;
+  agent?: string;
 }
 
 function fakeClient(opts: FakeClientOptions = {}) {
-  const create = vi.fn(async (_options: unknown) => {
+  const create = vi.fn(async (_input?: { directory?: string }) => {
     if (opts.createThrows !== undefined) throw opts.createThrows;
-    return opts.createResult ?? { data: { id: 'rev-s1' }, error: undefined };
+    return opts.createResult ?? { id: 'rev-s1' };
   });
   const prompt = vi.fn(
-    (_o: unknown) =>
-      new Promise((resolve, reject) => {
+    (_input: PromptRequest) =>
+      new Promise<void>((resolve, reject) => {
         if (opts.promptError !== undefined) return reject(opts.promptError);
         if (opts.promptNeverResolves) return; // hangs until the assertion times out
-        resolve(
-          opts.promptResult ?? {
-            data: {
-              info: {},
-              parts: opts.promptParts ?? [{ type: 'text', text: opts.promptText ?? '' }],
-            },
-            error: undefined,
-          }
-        );
+        resolve();
       })
   );
-  const client: ReviewSessionClient & {
-    session: { create: typeof create; prompt: typeof prompt };
-  } = {
-    session: { create, prompt },
-  };
-  const abort = vi.fn(async () => ({ data: true, error: undefined }));
+  const context = vi.fn(async (_input: { sessionID: string }) => opts.contextText ?? '');
+  const client: ReviewSessionClient = { session: { create, prompt, context } };
+  const abort = vi.fn(async (_input: { sessionID: string }) => {});
   if (opts.abort !== false) client.session.abort = abort;
-  return { client, create, prompt, abort };
+  return { client, create, prompt, context, abort };
 }
 
-function heyApiError(message: string) {
-  return { data: undefined, error: { message } };
-}
-
-describe('runReviewAssertion (SDK reviewer session)', () => {
+describe('runReviewAssertion (V2 reviewer session)', () => {
   it('passes on VERDICT: PASS, creating the session in the project dir and prompting the configured agent', async () => {
-    const f = fakeClient({ promptText: 'analysis...\nVERDICT: PASS' });
+    const f = fakeClient({ contextText: 'analysis...\nVERDICT: PASS' });
     const r = await runReviewAssertion(a, 'C:/proj', f.client);
     expect(r.passed).toBe(true);
 
     expect(f.create).toHaveBeenCalledTimes(1);
-    expect(f.create.mock.calls[0][0]).toEqual({ query: { directory: 'C:/proj' } });
+    expect(f.create.mock.calls[0][0]).toEqual({ directory: 'C:/proj' });
 
     expect(f.prompt).toHaveBeenCalledTimes(1);
     const call = f.prompt.mock.calls[0][0] as PromptRequest;
-    expect(call.path).toEqual({ id: 'rev-s1' });
-    expect(call.body.agent).toBe('reviewer');
-    expect(call.body.parts[0].text).toContain('Check it.');
-    expect(call.body.parts[0].text).toContain('VERDICT:');
+    expect(call.sessionID).toBe('rev-s1');
+    expect(call.agent).toBe('reviewer');
+    expect(call.text).toContain('Check it.');
+    expect(call.text).toContain('VERDICT:');
     expect(f.abort).not.toHaveBeenCalled();
   });
 
   it('fails on VERDICT: FAIL with reviewer text evidence', async () => {
-    const f = fakeClient({ promptText: 'VERDICT: FAIL because reasons' });
+    const f = fakeClient({ contextText: 'VERDICT: FAIL because reasons' });
     const r = await runReviewAssertion(a, 'C:/proj', f.client);
     expect(r.passed).toBe(false);
     expect(r.evidence).toContain('because reasons');
   });
 
-  it('joins multiple text parts into one review output', async () => {
-    const f = fakeClient({
-      promptParts: [
-        { type: 'text', text: 'part one' },
-        { type: 'step-start' },
-        { type: 'text', text: 'part two\nVERDICT: FAIL x' },
-      ],
-    });
+  it('reads the reviewer output from the session context', async () => {
+    const f = fakeClient({ contextText: 'part one\npart two\nVERDICT: FAIL x' });
     const r = await runReviewAssertion(a, 'C:/proj', f.client);
     expect(r.passed).toBe(false);
     expect(r.evidence).toContain('part one');
     expect(r.evidence).toContain('part two');
+    expect(f.context).toHaveBeenCalledWith({ sessionID: 'rev-s1' });
   });
 
   it('fails when no verdict line is present', async () => {
-    const f = fakeClient({ promptText: 'I reviewed it, LGTM' });
+    const f = fakeClient({ contextText: 'I reviewed it, LGTM' });
     const r = await runReviewAssertion(a, 'C:/proj', f.client);
     expect(r.passed).toBe(false);
     expect(r.evidence).toContain('no VERDICT');
   });
 
-  it('maps hey-api error responses to failed outcomes with actionable evidence', async () => {
-    const f = fakeClient({ promptResult: heyApiError('agent "reviewer" not found') });
+  it('maps prompt-time errors to failed outcomes with actionable evidence', async () => {
+    const f = fakeClient({ promptError: new Error('agent "reviewer" not found') });
     const r = await runReviewAssertion(a, 'C:/proj', f.client);
     expect(r.passed).toBe(false);
     expect(r.evidence).toContain('reviewer session failed');
@@ -133,8 +112,8 @@ describe('runReviewAssertion (SDK reviewer session)', () => {
 
   it('fails when session.create fails', async () => {
     const f = fakeClient({
-      createResult: heyApiError('unauthorized'),
-      promptText: 'never reached',
+      createThrows: new Error('unauthorized'),
+      contextText: 'never reached',
     });
     const r = await runReviewAssertion(a, 'C:/proj', f.client);
     expect(r.passed).toBe(false);
@@ -155,7 +134,7 @@ describe('runReviewAssertion (SDK reviewer session)', () => {
     expect(r.passed).toBe(false);
     expect(r.evidence).toContain('timed out after 1s');
     expect(r.evidence).toContain('aborted');
-    await vi.waitFor(() => expect(f.abort).toHaveBeenCalledWith({ path: { id: 'rev-s1' } }));
+    await vi.waitFor(() => expect(f.abort).toHaveBeenCalledWith({ sessionID: 'rev-s1' }));
   }, 10_000);
 
   it('survives a missing or failing abort on timeout', async () => {
@@ -177,18 +156,9 @@ describe('runReviewAssertion (SDK reviewer session)', () => {
     expect(r2.evidence).toContain('timed out');
   }, 15_000);
 
-  it('accepts plain-payload fakes (no hey-api envelope)', async () => {
-    const f = fakeClient({
-      createResult: { id: 'plain-1' },
-      promptResult: { info: {}, parts: [{ type: 'text', text: 'ok\nVERDICT: PASS' }] },
-    });
-    const r = await runReviewAssertion(a, 'C:/proj', f.client);
-    expect(r.passed).toBe(true);
-  });
-
   it('fail-closed when no client is provided', async () => {
     const r = await runReviewAssertion(a, 'C:/proj', undefined);
     expect(r.passed).toBe(false);
-    expect(r.evidence).toContain('no opencode SDK client');
+    expect(r.evidence).toContain('no opencode plugin context');
   });
 });
