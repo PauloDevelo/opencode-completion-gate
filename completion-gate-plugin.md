@@ -135,7 +135,7 @@ Uses the `az` CLI to verify the current branch has exactly one active Azure DevO
 { "type": "ado-pr", "name": "pr-quality-gate", "pollTimeoutMinutes": 15, "pollIntervalSeconds": 30, "skipIfNoPr": false }
 ```
 
-Flow: resolve current branch (`git branch --show-current`) → `az repos pr list --source-branch <branch> --status active` → fail if zero (unless `skipIfNoPr`) or multiple PRs → `az repos pr policy list --id <prId>` → poll while required automated policies are queued/running. A rejected or broken automated policy fails immediately with its policy detail; the timeout is only used while a policy is still in progress.
+Flow: resolve current branch (`git branch --show-current`) → `az repos pr list --source-branch <branch> --status active` → fail if zero (unless `skipIfNoPr`) or multiple PRs → `az repos pr policy list --id <prId>` → poll while any required automated policy is queued/running. A rejected or broken automated policy fails only after the policy set has settled (nothing queued/running), so the evidence describes the current evaluation instead of a leftover from the previous run; the timeout is only used while a policy is still in progress.
 
 #### Ignoring human-review policies (`ignoreHumanPolicies`)
 
@@ -153,7 +153,7 @@ Some blocking policies can only be turned green by a **human** (approving, resol
 
 With the flag on, a green result reports what was skipped, e.g. `4 required policy(ies) green, 2 human policy(ies) ignored (...)`. If *only* human policies remain on the PR, it counts as green. The flag is opt-in — without it every blocking policy must be green before the gate passes.
 
-Policy polling distinguishes pending from terminal states. `queued` and `running` are retried; `approved`, `succeeded`, and `notApplicable` pass; `rejected` and `broken` fail immediately. Unknown statuses on automated policies also fail immediately so the gate does not hide an API-shape or policy-state change behind a polling timeout. Human-review policies remain retryable when they are not ignored, because their state can change after manual action.
+Policy polling distinguishes pending from terminal states. `queued` and `running` are retried; `approved`, `succeeded`, and `notApplicable` pass. **While any required blocking policy is still in progress, the whole policy set counts as unsettled**: a `rejected`, `broken`, or unknown automated policy is retried instead of failing, because it can be a stale evaluation left over from the previous run. The typical case is a blocking SonarQube `Status` policy (configured with `invalidateOnSourceUpdate: false`) still showing the previous analysis's rejection while the new `Build` policy runs — SonarQube posts its status from inside the build, so the stale value overlaps the running build. Once nothing is in progress, a remaining `rejected`, `broken`, or unknown automated status fails immediately, so the gate does not hide an API-shape or policy-state change behind a polling timeout and the reported policy detail always comes from the settled evaluation. Human-review policies remain retryable when they are not ignored, because their state can change after manual action.
 
 **Field shapes** were calibrated against live `az repos pr list` / `az repos pr policy list` payloads (sanitized fixtures in `tests/fixtures/`). If a real PR trips an unparsable-shape failure, check `gate-diag.log` and report the mismatch.
 
@@ -233,7 +233,7 @@ gate FAILED on <id>: "azure-devops-pr-green" — retry 1/3, injecting fix reques
 gate PASSED on <id>: all 6 assertion(s) green
 ```
 
-For a completed failed build, the diagnostic instead records `PR !<id> has terminal policy failure — ... Build: rejected ...; stopping polling`, and the same detail is returned to the agent as assertion evidence.
+For a completed failed build, the diagnostic instead records `PR !<id> has terminal policy failure — ... Build: rejected ...; stopping polling`, and the same detail is returned to the agent as assertion evidence. A `rejected`/`broken` policy is only reported that way once nothing on the PR is still `queued`/`running`: while anything is in progress the round stays on the polling detail above and no build logs are downloaded yet.
 
 Also logged: session registrations, successful lazy registration, skipped subagents, rejected metadata, session lookup failures, `/gate` toggles, review session creation and verdicts, timeouts, short-circuit stops (`remaining assertions skipped`), escalations after the retry cap, and mid-run aborts (`gate turn-end ABORTED on <id>`). For resumed sessions, use these entries in `gate-diag.log` to distinguish successful registration from a skipped subagent, rejected metadata, or a lookup failure.
 
@@ -245,6 +245,7 @@ Also logged: session registrations, successful lazy registration, skipped subage
 | Agent cannot read `.opencode/completion-gate.json` | If the project's `.opencode/` is a symlink/junction (e.g. worktree setups), opencode resolves it before permission checks — the read is evaluated against `permission.external_directory` using the canonical path, so the project's `opencode.json` must allow that canonical path. |
 | Toggle does nothing / odd behavior | For a resumed session, run `/gate status` first to trigger or confirm lazy registration, then inspect `~/.config/opencode/gate-diag.log` (see [Diagnostics log](#diagnostics-log)) for successful registration, a skipped subagent, rejected metadata, or a lookup failure. |
 | Gate keeps re-running while waiting for reviewers/comments on a PR | Those are human-review policies; set `"ignoreHumanPolicies": true` on the `ado-pr` assertion (see [ado-pr](#ado-pr)) or resolve them manually. |
+| `ado-pr` fails with `Status: rejected` while the CI build is still running | Older plugin builds judged terminality per policy, so a stale `Status` evaluation from the previous run (typically SonarQube with `invalidateOnSourceUpdate: false`) failed the gate mid-build. Current builds keep polling while any required policy is `queued`/`running` and only judge terminality once the set has settled — upgrade `opencode-completion-gate`. |
 | `/gate off` didn't stop the current run instantly | An already-started command/poll round finishes first; the abort lands at the next checkpoint and logs `gate turn-end ABORTED`. |
 | `ado-pr` always fails | `az` must be installed and logged in (`az login`), and the org/project is derived from the git remote. Zero/multiple active PRs on the branch also fail (see `skipIfNoPr`). |
 | Build log artifacts missing | Check the reported ZIP path and the `Build log artifact error:` line in the evidence, then `gate-diag.log`. No logs are downloaded while the build policy is still `queued` or `running` — only after a terminal failure; a retry cycle re-downloads for a newly failed build. |
