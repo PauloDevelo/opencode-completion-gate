@@ -24,6 +24,8 @@ Add the plugin to your OpenCode configuration (V2):
 ```
 
 > Requires OpenCode V2 (`@opencode/plugin` ≥ 2.0). For OpenCode V1, use `opencode-completion-gate@1.x` and the `plugin` field.
+>
+> Restart OpenCode after changing the `plugins` array: plugins are loaded at startup, so a running session keeps the previous plugin set. The addition only takes effect after the restart.
 
 ## Quick start
 
