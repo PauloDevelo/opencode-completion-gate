@@ -4,10 +4,10 @@ description: Create or maintain a project's .opencode/completion-gate.json — t
 license: MIT
 compatibility: opencode
 metadata:
-  version: "2.0.0"
+  version: "2.2.0"
   author: "pto"
   tags: ["opencode", "plugin", "quality-gate", "completion-gate", "ci"]
-  updated: "2026-10-15"
+  updated: "2026-11-17"
 ---
 
 # Completion Gate Configuration
@@ -85,7 +85,7 @@ Runs a shell command in the project root. Passes on exit code 0 within the timeo
 
 ### `ado-pr`
 
-Uses the `az` CLI to verify the current branch has **exactly one active Azure DevOps PR** whose required policies are all green (`approved`, `succeeded`, or `notapplicable`). Polls while required policies are retryable: automated policies only in `queued`/`running`, and human-review policies whenever `ignoreHumanPolicies` is `false`; terminal automated failures are returned immediately with their policy detail.
+Uses the `az` CLI to verify the current branch has **exactly one active Azure DevOps PR** whose required policies are all green (`approved`, `succeeded`, or `notapplicable`). It polls while the policy set is unsettled: any required policy still in `queued`/`running` keeps the whole set retryable, because a `rejected` automated policy can be a stale evaluation from the previous run. Human-review policies stay retryable whenever `ignoreHumanPolicies` is `false`. Once nothing is in progress, terminal automated failures are returned with their policy detail.
 
 ```json
 { "type": "ado-pr", "name": "azure-devops-pr-green",
@@ -106,7 +106,7 @@ Requirements:
 
 If only human policies remain, the assertion counts as green.
 
-Automated `queued` and `running` statuses are polled. Automated `rejected`, `broken`, and unknown statuses fail immediately rather than waiting for `pollTimeoutMinutes`. Human-review policies remain retryable when `ignoreHumanPolicies` is `false`, because a human action can change their state.
+Automated `queued` and `running` statuses are polled, and while anything is still in progress **every** automated `rejected`, `broken`, or unknown status is polled too instead of failing: it can be a stale evaluation from the previous run (classic case: a blocking SonarQube `Status` policy with `invalidateOnSourceUpdate: false` still showing the previous analysis's rejection while the new `Build` runs). Once nothing is in progress, remaining automated `rejected`, `broken`, and unknown statuses fail immediately rather than waiting for `pollTimeoutMinutes`. Human-review policies remain retryable when `ignoreHumanPolicies` is `false`, because a human action can change their state.
 
 ### `opencode-review`
 
@@ -165,6 +165,37 @@ Adapted from AquadvancedEnergy — note the `cd` + `&&` chaining and generous ti
 }
 ```
 
+### Review loop (`opencode-review`)
+
+Turns the gate into the review → fix → review loop: at every turn end the assertion spawns a reviewer session, injects the reviewer's blocking findings into your session as a fix request, and reviews again after you finish the next turn. `maxRetries` caps the cycles, then the gate escalates instead of looping.
+
+```json
+{
+  "type": "opencode-review",
+  "name": "self-review",
+  "agent": "reviewer",
+  "prompt": "Review the changes on the current branch against the task requirements.\n\nScope: review only the changes introduced by this branch, computed as the merge-base diff against the PR target branch (resolve the target exactly as your workflow step 0 requires. When there is no PR, use the merge base with the repository default branch.) Never report pre-existing code as a finding.\n\nSeverity: label every finding Critical, Major, or Minor. Only Critical and Major findings are blocking. Minor findings are non-blocking by definition: list them, but they never change the verdict.\n\nOutput order: findings first, most severe first. Then a final section titled \"Blocking findings\" restating the condensed list (one line each: severity, file:line, what to change). This section must be the last thing before the verdict, because only the tail of your reply reaches the agent that has to fix it.\n\nFinish with a single final line in the form VERDICT: PASS or VERDICT: FAIL plus a one-line justification. PASS is correct whenever no Critical or Major finding is open, even when minor findings remain.",
+  "timeoutSeconds": 1800
+}
+```
+
+Live in `AquadvancedEnergy` and `EM2S` under the name `self-review`.
+
+Three behaviours that make it a loop:
+
+- **Isolated reviewer** — the assertion creates a new session with the `agent` you name, and new sessions start gate-disabled, so the reviewer cannot recursively trigger the gate.
+- **Tail evidence** — on failure only the **last 50 non-empty lines** of the reviewer reply (`truncateTail`) are injected into the session as the fix request. The fixer sees the end of the review, never the beginning.
+- **Bounded retries** — every failed turn end spends one retry from the session budget (`maxRetries`, default 3, reset by a genuine user message). At the cap the gate escalates with a message and stops retrying.
+
+Two constraints for anyone editing this assertion:
+
+1. **Keep the blocking list at the END of the review.** Put the verdict requirement last in the prompt and the condensed findings immediately before it, otherwise truncation drops the actionable part and the fixer only receives a verdict.
+2. **"PASS with minor findings" belongs in the prompt text.** `parseVerdict` is strictly `PASS`/`FAIL` and takes the last occurrence in the reply; do not try to express a third state there.
+
+Placement: after the fast `command` assertions and before `ado-pr`. A review is only meaningful on a green build, and the expensive reviewer session should not run on a red one.
+
+Known limitation: each round is a fresh reviewer session with no memory of the previous round's findings, so a large diff may surface new Major findings every round rather than converging. `maxRetries` bounds that, it does not eliminate it.
+
 ## Critical Gotchas
 
 ### 1. One bad assertion kills the whole config (silently)
@@ -205,6 +236,20 @@ Commands go through the shell, so `&&` chaining and `cmd` builtins work — but 
 
 Zero PRs fails (use `skipIfNoPr: true` for pre-PR work); **two or more** active PRs on the branch always fails. Keep one PR per branch.
 
+### 8. `command` failure evidence is truncated, and `gate-diag.log` has no output
+
+- The fix evidence injected into the session is a **tail slice** of the command output (last
+  ~50 lines). For a multi-project `dotnet test` the head is dropped (`[... 140 earlier lines
+  omitted]`) and the failing-test summary falls outside it. Give the assertion a durable
+  artifact instead — `"run": "dotnet test MySolution.sln --logger \"trx;LogFileName=gate.trx\""`
+  and read `gate.trx` after a failure — or split one assertion per test project so each tail is
+  narrow enough to contain the failure.
+- `gate-diag.log` (`~/.config/opencode/gate-diag.log`) is **shared by every concurrent session**
+  and records verdicts only (`assertion "<name>" FAILED - exit code N`, config path, retries,
+  aborts). It never contains the assertion's command output — expect interleaved lines from
+  other `ses_...` sessions and filter by your own session id. It tells you *whether* the gate
+  fired, never *why the command failed*.
+
 ## Validation & Testing
 
 1. **JSON sanity** (from the project root):
@@ -215,7 +260,7 @@ node -e "JSON.parse(require('fs').readFileSync('.opencode/completion-gate.json',
 
 2. **End-to-end**: start an opencode session in the project, type `/gate`, send a trivial instruction, and watch the gate evaluate at turn end.
 
-3. **Diagnostics**: every gate activity is traced in `~/.config/opencode/gate-diag.log` (config path resolved, assertion count, per-assertion results, retries, aborts). This is the first place to look when the gate doesn't fire or behaves oddly.
+3. **Diagnostics**: every gate activity is traced in `~/.config/opencode/gate-diag.log` (config path resolved, assertion count, per-assertion results, retries, aborts). This is the first place to look when the gate doesn't fire or behaves oddly — but it is shared across concurrent sessions and records verdicts only, never the command output (see gotcha 8).
 
 4. **Status**: `/gate status` shows `ENABLED/DISABLED · retries=n · lastOutcome=...` for the session. Remember the session toggle is separate from the config — the config can be perfect and the gate still off until `/gate`.
 
