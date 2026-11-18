@@ -183,14 +183,18 @@ export function requiredPoliciesGreen(
       .map((e) => `${e.configuration?.type?.displayName ?? 'policy'}: ${String(e.status ?? '?')}`)
       .join('; ');
     const skipped = ignored.length > 0 ? ` (${ignored.length} human policy(ies) ignored)` : '';
-    const hasTerminalAutomatedFailure = bad.some(
-      (e) =>
-        !isHumanReviewPolicy(e) &&
-        !IN_PROGRESS_POLICY_STATUSES.has(String(e.status ?? '').toLowerCase())
+    // A policy that is still queued/running means the PR's policy set is in flux: another
+    // rejection can be a stale evaluation left over from the previous build or analysis (e.g. a
+    // blocking SonarQube "Status" policy with invalidateOnSourceUpdate=false still showing the
+    // previous analysis's rejection while the new CI build runs). Poll until nothing is in
+    // progress, then judge terminality on the settled evaluations.
+    const stillSettling = bad.some((e) =>
+      IN_PROGRESS_POLICY_STATUSES.has(String(e.status ?? '').toLowerCase())
     );
+    const onlyHumanRemaining = bad.every(isHumanReviewPolicy);
     return {
       green: false,
-      retryable: !hasTerminalAutomatedFailure,
+      retryable: stillSettling || onlyHumanRemaining,
       detail: `PR policies not green — ${names}${skipped}`,
     };
   }

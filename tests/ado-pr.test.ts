@@ -563,6 +563,50 @@ describe('runAdoPrAssertion', () => {
     expect(r.evidence).toContain('Comment requirements');
     expect(policyCalls).toBeGreaterThan(1);
   });
+
+  it('keeps polling a stale rejected Status policy while the Build policy runs', async () => {
+    const policyResponses = [
+      JSON.stringify([
+        {
+          configuration: { isBlocking: true, type: { displayName: 'Status' } },
+          status: 'rejected',
+        },
+        { configuration: { isBlocking: true, type: { displayName: 'Build' } }, status: 'running' },
+      ]),
+      JSON.stringify([
+        {
+          configuration: { isBlocking: true, type: { displayName: 'Status' } },
+          status: 'approved',
+        },
+        {
+          configuration: { isBlocking: true, type: { displayName: 'Build' } },
+          status: 'succeeded',
+        },
+      ]),
+    ];
+    let policyCalls = 0;
+    let downloads = 0;
+    const shell: ShellFn = async (args) => {
+      const key = args.join(' ');
+      if (args[0] === 'git') return 'feat/test\n';
+      if (key.includes('repos pr list')) return PR_ONE;
+      if (key.includes('repos pr policy'))
+        return policyResponses[Math.min(policyCalls++, policyResponses.length - 1)];
+      throw new Error(`unexpected shell call: ${key}`);
+    };
+    let t = 1000;
+    const r = await runAdoPrAssertion(a, 'C:/proj', shell, {
+      sleep: async () => {},
+      now: () => (t += 6_000),
+      buildLogArtifact: async () => {
+        downloads += 1;
+        throw new Error('artifact runner must not run while policies are still settling');
+      },
+    });
+    expect(r).toEqual({ name: 'pr-gate', passed: true, evidence: '' });
+    expect(policyCalls).toBe(2);
+    expect(downloads).toBe(0);
+  });
 });
 
 describe('requiredPoliciesGreen ignoreHumanPolicies', () => {
@@ -621,6 +665,59 @@ describe('requiredPoliciesGreen ignoreHumanPolicies', () => {
   it('flag off keeps zero-blocking-policies failure unchanged', () => {
     expect(requiredPoliciesGreen('[]').green).toBe(false);
     expect(requiredPoliciesGreen('[]', { ignoreHumanPolicies: true }).green).toBe(false);
+  });
+});
+
+describe('requiredPoliciesGreen while a policy is still settling', () => {
+  const statusPolicy = (status: string) => ({
+    configuration: { isBlocking: true, type: { displayName: 'Status' } },
+    status,
+  });
+  const buildPolicy = (status: string) => ({
+    configuration: { isBlocking: true, type: { displayName: 'Build' } },
+    status,
+  });
+
+  it('retries a rejected Status policy while the Build policy runs (stale previous run)', () => {
+    const r = requiredPoliciesGreen(
+      JSON.stringify([statusPolicy('rejected'), buildPolicy('running')])
+    );
+    expect(r.green).toBe(false);
+    expect(r.retryable).toBe(true);
+    expect(r.detail).toContain('Status: rejected');
+    expect(r.detail).toContain('Build: running');
+  });
+
+  it('retries a rejected Status policy while the Build policy is only queued', () => {
+    const r = requiredPoliciesGreen(
+      JSON.stringify([statusPolicy('rejected'), buildPolicy('queued')])
+    );
+    expect(r.retryable).toBe(true);
+  });
+
+  it('fails fast on a settled rejection once nothing is in progress', () => {
+    const r = requiredPoliciesGreen(
+      JSON.stringify([statusPolicy('rejected'), buildPolicy('succeeded')])
+    );
+    expect(r.green).toBe(false);
+    expect(r.retryable).toBe(false);
+  });
+
+  it('fails fast on a lone rejected Build policy', () => {
+    expect(requiredPoliciesGreen(JSON.stringify([buildPolicy('rejected')]))).toMatchObject({
+      green: false,
+      retryable: false,
+    });
+  });
+
+  it('keeps human-review policies retryable when they are not ignored', () => {
+    const json = JSON.stringify([
+      {
+        configuration: { isBlocking: true, type: { displayName: 'Comment requirements' } },
+        status: 'rejected',
+      },
+    ]);
+    expect(requiredPoliciesGreen(json)).toMatchObject({ green: false, retryable: true });
   });
 });
 
