@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/PauloDevelo/opencode-completion-gate/compare/v2.0.0...v2.0.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* keep polling PR policies while CI is still running ([#14](https://github.com/PauloDevelo/opencode-completion-gate/issues/14)) ([40713c4](https://github.com/PauloDevelo/opencode-completion-gate/commit/40713c4be72744ce71df1b3094f68bbb532c4fbe))
+
 ## [2.0.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v1.3.1...v2.0.0) (2026-10-15)
 
 
