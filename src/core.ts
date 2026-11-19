@@ -33,6 +33,8 @@ export {
   runAdoPrAssertion,
 } from './ado-pr.js';
 export { parseVerdict, runReviewAssertion } from './review.js';
+export { RUN_RECORD_DIR_ENV, buildRunRecord, runRecordDir, writeRunRecord } from './run-record.js';
+export type { RunRecord, RunRecordAssertion, RunRecordInput } from './run-record.js';
 export type {
   AdoPrAssertion,
   AdoPrPollOptions,

@@ -234,6 +234,42 @@ A passing gate posts its success note **once** per consecutive-passing streak, a
 
 Set `OPENCODE_GATE_DISABLED=1` to suspend all gate evaluations. Like `/gate off`, this also **aborts an in-flight evaluation** at the next checkpoint; unset the variable to resume gating (the per-session toggle flag itself is unaffected).
 
+## Run records
+
+The diagnostics log is for humans: it is shared by every concurrent session and records verdicts only. When another program has to decide whether the gate really ran (an orchestrator that only calls work complete on evidence, for example), that program needs a machine interface. Every completed evaluation therefore writes one JSON record per session:
+
+```
+~/.config/opencode/gate-runs/<session-id>.json
+```
+
+The directory follows `OPENCODE_GATE_RUN_DIR` when set, which is how a test or a container redirects it without touching the user's config directory. The record:
+
+```json
+{
+  "version": 1,
+  "sessionId": "ses_...",
+  "configPath": "/workspace/AquadvancedEnergy/.opencode/completion-gate.json",
+  "projectRoot": "/workspace/AquadvancedEnergy",
+  "platform": "linux",
+  "startedAt": "2026-11-19T10:00:00.000Z",
+  "finishedAt": "2026-11-19T10:11:42.000Z",
+  "expected": 5,
+  "evaluated": 2,
+  "outcome": "failed",
+  "assertions": [
+    { "name": "backend-build", "passed": true },
+    { "name": "backend-tests", "passed": false, "evidence": "exit code 1" }
+  ]
+}
+```
+
+Two properties make it usable as evidence, and both are deliberate:
+
+- `outcome` is `passed` only when **every expected assertion** produced a passing result. Assertions short-circuit, so `expected` can exceed `evaluated`; "verified 2 of 5" is a failure, never a pass.
+- an evaluation that expected nothing is `failed`. Zero observations is not a pass.
+
+The record is overwritten on each evaluation of the same session, so the file always describes the latest turn. Writing is best effort: a record that cannot be written is logged in `gate-diag.log` and never breaks the gate.
+
 ## Diagnostics log
 
 Every gate activity is appended to `~/.config/opencode/gate-diag.log`. The log traces the full turn-end flow, so you can see exactly where a run is at any moment:
