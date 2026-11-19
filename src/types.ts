@@ -5,6 +5,21 @@ export interface CommandAssertion {
   timeoutSeconds: number;
 }
 
+/**
+ * The `run` field of a command assertion may be a single string (the original
+ * shape, still valid) or one command per platform. The config layer resolves it
+ * to a single string before anything reaches the runner, so `CommandAssertion.run`
+ * stays a string at runtime.
+ *
+ * Both keys are optional so the JSON can be authored incrementally, but a config
+ * that does not carry a command for the platform it is being read on is
+ * rejected rather than run against the other platform's shell.
+ */
+export interface PlatformCommand {
+  windows?: string;
+  linux?: string;
+}
+
 export interface AdoPrAssertion {
   type: 'ado-pr';
   name: string;
