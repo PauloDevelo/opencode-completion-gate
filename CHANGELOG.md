@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v2.1.0...v2.2.0) (2026-11-19)
+
+
+### Features
+
+* **gate:** write a structured run record for every evaluation ([#18](https://github.com/PauloDevelo/opencode-completion-gate/issues/18)) ([625c650](https://github.com/PauloDevelo/opencode-completion-gate/commit/625c65066df57deda09802860ab3811a3f6a1c15))
+
 ## [2.1.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v2.0.1...v2.1.0) (2026-11-19)
 
 
