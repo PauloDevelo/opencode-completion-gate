@@ -101,7 +101,7 @@ Example (`<project-root>/.opencode/completion-gate.json`):
 | `maxRetries` | project | `3` | Auto-fix injections allowed per fix cycle before escalation |
 | `assertions` | project | *(required)* | At least one assertion; empty array disables the gate |
 | `name` | all | see below | Label used in reports; falls back to first token of `run` (`command`), `ado-pr`, or `self-review` (`opencode-review`) |
-| `run` | `command` | *(required)* | Shell command executed in the project root |
+| `run` | `command` | *(required)* | Shell command executed in the project root, or an object with one command per platform: `{ "windows": "...", "linux": "..." }` |
 | `timeoutSeconds` | `command` | `300` | Kill the process tree after this many seconds (failure) |
 | `pollTimeoutMinutes` | `ado-pr` | `15` | Give up polling for green policies after this long (failure) |
 | `pollIntervalSeconds` | `ado-pr` | `30` | Delay between policy polls (floored at 5s) |
@@ -126,6 +126,27 @@ Spawns the shell command in the session's project root. Passes on exit code 0 wi
 ```json
 { "type": "command", "name": "unit-tests", "run": "dotnet test --no-build --nologo -v q", "timeoutSeconds": 600 }
 ```
+
+**One command per platform.** When the same project is gated on Windows and on linux (a workstation and a container, for instance), `run` may carry one command per platform instead of a single string:
+
+```json
+{
+  "type": "command",
+  "name": "backend-build",
+  "run": {
+    "windows": "dotnet build AquadvancedEnergyHost.sln --nologo",
+    "linux": "dotnet build Sources/AquadvancedEnergy.Host/AquadvancedEnergy.Host.csproj --nologo"
+  },
+  "timeoutSeconds": 900
+}
+```
+
+The pair is resolved when the config is loaded, so the runner still receives a single string and nothing downstream changes. Two rules make this safe rather than convenient:
+
+- a pair that carries **no command for the host reading it** is rejected, not run against the other platform's shell (a Windows command under `sh` fails in a way that looks like a real regression). The rejection is written to `gate-diag.log` with the platform name;
+- because validation is all-or-nothing, the rejection skips the **whole** config. Keep one plugin version on every host that reads the same config, and check the diag log before trusting a gate that suddenly stops reporting.
+
+A plain string remains valid and means the same command on every platform.
 
 ### `ado-pr`
 

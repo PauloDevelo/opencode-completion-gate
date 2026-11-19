@@ -129,3 +129,44 @@ describe('loadGateConfig', () => {
     expect(loadGateConfig(dir)).toBeNull();
   });
 });
+
+describe('platform commands', () => {
+  const CURRENT = process.platform === 'win32' ? 'windows' : 'linux';
+  const OTHER = process.platform === 'win32' ? 'linux' : 'windows';
+
+  function load(run: unknown) {
+    const dir = makeTempProject({
+      '.opencode/completion-gate.json': JSON.stringify({ assertions: [{ type: 'command', run }] }),
+    });
+    return loadGateConfig(dir);
+  }
+
+  it('resolves the pair to the command for this platform', () => {
+    const loaded = load({ [CURRENT]: 'current-cmd', [OTHER]: 'other-cmd' })!;
+    expect(loaded.config.assertions[0]).toMatchObject({ run: 'current-cmd' });
+  });
+
+  it('rejects a pair without a command for this platform instead of guessing', () => {
+    expect(load({ [OTHER]: 'other-cmd' })).toBeNull();
+  });
+
+  it('names the assertion from the resolved command', () => {
+    const loaded = load({ [CURRENT]: 'dotnet build' })!;
+    expect(loaded.config.assertions[0]).toMatchObject({ name: 'dotnet' });
+  });
+
+  it('rejects an empty pair and unknown platform keys', () => {
+    expect(load({})).toBeNull();
+    expect(load({ mac: 'x' })).toBeNull();
+  });
+
+  it('rejects a non-string command inside the pair', () => {
+    expect(load({ [CURRENT]: 42 })).toBeNull();
+    expect(load({ [CURRENT]: '   ' })).toBeNull();
+  });
+
+  it('still accepts a plain string', () => {
+    const loaded = load('plain-cmd')!;
+    expect(loaded.config.assertions[0]).toMatchObject({ run: 'plain-cmd', name: 'plain-cmd' });
+  });
+});

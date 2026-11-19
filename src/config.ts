@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import type { AssertionOutcome, GateAssertion, GateConfig } from './types.js';
+import { logDiag } from './process.js';
 
 export type GateMode = 'combined' | 'command-only';
 
@@ -18,6 +19,48 @@ function positiveInt(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
 }
 
+/**
+ * A command assertion carries either one command or one command per platform.
+ * The platform pair is resolved here, at config load, so the runner never has to
+ * know about platforms and the resolved shape stays the original one.
+ *
+ * A pair that does not carry a command for the host it is read on is rejected on
+ * purpose: running the Windows command on linux (or the reverse) would produce a
+ * confident, meaningless pass or a spurious failure. The rejection is logged,
+ * because an all-or-nothing validation that fails silently is how a gate ends up
+ * off without anyone noticing.
+ */
+function resolvePlatformCommand(
+  run: unknown,
+  nameOf: (fallback: string) => string
+): { run: string; name: string } | null {
+  if (typeof run === 'string') {
+    const command = run.trim();
+    if (!command) return null;
+    return { run, name: nameOf(command.split(/\s+/)[0]) };
+  }
+
+  if (!run || typeof run !== 'object' || Array.isArray(run)) return null;
+
+  const pair = run as Record<string, unknown>;
+  const unknownKeys = Object.keys(pair).filter((key) => key !== 'windows' && key !== 'linux');
+  if (unknownKeys.length > 0) {
+    logDiag(`gate config: run carries unknown platform key(s): ${unknownKeys.join(', ')}`);
+    return null;
+  }
+
+  const platform = process.platform === 'win32' ? 'windows' : 'linux';
+  const command = pair[platform];
+  if (typeof command !== 'string' || !command.trim()) {
+    logDiag(
+      `gate config: run has no "${platform}" command for this host (${process.platform}); the whole config is skipped`
+    );
+    return null;
+  }
+
+  return { run: command, name: nameOf(command.trim().split(/\s+/)[0]) };
+}
+
 function validateGateConfig(raw: unknown): GateConfig | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
@@ -28,15 +71,17 @@ function validateGateConfig(raw: unknown): GateConfig | null {
     if (!a || typeof a !== 'object') return null;
     const nameOf = (fb: string) => (typeof a.name === 'string' && a.name.trim() ? a.name : fb);
     switch (a.type) {
-      case 'command':
-        if (typeof a.run !== 'string' || !a.run.trim()) return null;
+      case 'command': {
+        const resolved = resolvePlatformCommand(a.run, nameOf);
+        if (!resolved) return null;
         assertions.push({
           type: 'command',
-          name: nameOf(a.run.split(/\s+/)[0]),
-          run: a.run,
+          name: resolved.name,
+          run: resolved.run,
           timeoutSeconds: positiveInt(a.timeoutSeconds, 300),
         });
         break;
+      }
       case 'ado-pr':
         assertions.push({
           type: 'ado-pr',

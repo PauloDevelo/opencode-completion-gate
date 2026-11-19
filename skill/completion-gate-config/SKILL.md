@@ -4,10 +4,10 @@ description: Create or maintain a project's .opencode/completion-gate.json — t
 license: MIT
 compatibility: opencode
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   author: "pto"
   tags: ["opencode", "plugin", "quality-gate", "completion-gate", "ci"]
-  updated: "2026-11-17"
+  updated: "2026-11-19"
 ---
 
 # Completion Gate Configuration
@@ -50,7 +50,7 @@ The gate is **off by default per session** — the user enables it with `/gate`.
 |---|---|---|---|
 | `type` | all | *(required)* | `command`, `ado-pr`, or `opencode-review`. **Any other value invalidates the whole config.** |
 | `name` | all | first token of `run` / `ado-pr` / `self-review` | Label used in failure/success reports. Always set it — it's what the agent sees in retry prompts. |
-| `run` | `command` | *(required)* | Shell command executed in the project root. Missing/empty `run` invalidates the whole config. |
+| `run` | `command` | *(required)* | Shell command executed in the project root, or one command per platform: `{ "windows": "...", "linux": "..." }`. Missing/empty `run`, or a pair without a command for the host reading it, invalidates the whole config. |
 | `timeoutSeconds` | `command` | `300` | Kills the process tree on expiry (counts as failure). |
 | `pollTimeoutMinutes` | `ado-pr` | `15` | Give up polling for green PR policies after this long (failure). |
 | `pollIntervalSeconds` | `ado-pr` | `30` | Delay between policy polls (floored at 5s). |
@@ -227,6 +227,8 @@ An agent in the retry loop can never get a human to approve a PR or resolve comm
 ### 5. Windows shell syntax in `run`
 
 Commands go through the shell, so `&&` chaining and `cmd` builtins work — but JSON-escape backslashes (`cd Sources\\Web && npm run build`) and remember this is `cmd`-style syntax on Windows (`if exist node_modules rmdir /s /q node_modules`), not bash.
+
+When the same project is gated on both Windows and linux, give `run` one command per platform (`{ "windows": "...", "linux": "..." }`) instead of trying to write one string that survives both shells. A pair that carries no command for the host reading it invalidates the whole config, so every host that loads the file needs the plugin version that understands the pair, and the diag log names the platform when it rejects one.
 
 ### 6. Default timeouts are too small for real solutions
 
