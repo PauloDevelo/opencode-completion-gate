@@ -20,6 +20,7 @@ import {
 } from './config.js';
 import { runAdoPrAssertion } from './ado-pr.js';
 import { runReviewAssertion } from './review.js';
+import { writeRunRecord } from './run-record.js';
 import type {
   AdoPrPollOptions,
   AssertionOutcome,
@@ -491,6 +492,7 @@ async function runGateTurnEnd(ctx: GateContext, state: GateSessionState): Promis
     `gate turn-end on ${state.sessionID}: ${loaded ? `config ${loaded.path}` : 'command-only without project config'} (${assertions.length} assertion(s), maxRetries=${cap.value} (${cap.source}), retries so far=${state.retries})`
   );
 
+  const startedAt = new Date().toISOString();
   const results = await evaluateAssertions(
     assertions,
     projectRoot,
@@ -503,6 +505,15 @@ async function runGateTurnEnd(ctx: GateContext, state: GateSessionState): Promis
     );
     return;
   }
+  writeRunRecord({
+    sessionId: state.sessionID,
+    configPath: loaded?.path ?? null,
+    projectRoot,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    expectedAssertions: assertions.map((a) => a.name),
+    results,
+  });
   const last = results[results.length - 1];
   if (!last) return;
 

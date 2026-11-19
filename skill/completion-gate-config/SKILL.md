@@ -4,7 +4,7 @@ description: Create or maintain a project's .opencode/completion-gate.json — t
 license: MIT
 compatibility: opencode
 metadata:
-  version: "2.3.0"
+  version: "2.4.0"
   author: "pto"
   tags: ["opencode", "plugin", "quality-gate", "completion-gate", "ci"]
   updated: "2026-11-19"
@@ -264,7 +264,9 @@ node -e "JSON.parse(require('fs').readFileSync('.opencode/completion-gate.json',
 
 3. **Diagnostics**: every gate activity is traced in `~/.config/opencode/gate-diag.log` (config path resolved, assertion count, per-assertion results, retries, aborts). This is the first place to look when the gate doesn't fire or behaves oddly — but it is shared across concurrent sessions and records verdicts only, never the command output (see gotcha 8).
 
-4. **Status**: `/gate status` shows `ENABLED/DISABLED · retries=n · lastOutcome=...` for the session. Remember the session toggle is separate from the config — the config can be perfect and the gate still off until `/gate`.
+4. **Status**: `/gate status` shows `ENABLED/DISABLED · retries=n · lastOutcome=...` for the session. Remember the session toggle is separate from the config - the config can be perfect and the gate still off until `/gate`.
+
+5. **Run record**: every completed evaluation writes `~/.config/opencode/gate-runs/<session-id>.json` (`OPENCODE_GATE_RUN_DIR` overrides the directory). This is the machine-readable proof for anything that must decide whether the gate really ran, and `outcome` is `passed` only when every EXPECTED assertion produced a passing result. Short-circuiting leaves `expected` above `evaluated`, and that is a failure.
 
 ## Reporting Issues
 
