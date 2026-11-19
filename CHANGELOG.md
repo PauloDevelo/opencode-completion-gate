@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v2.0.1...v2.1.0) (2026-11-19)
+
+
+### Features
+
+* **config:** accept one command per platform for run ([#16](https://github.com/PauloDevelo/opencode-completion-gate/issues/16)) ([17299e9](https://github.com/PauloDevelo/opencode-completion-gate/commit/17299e9984b9c75beb387eea182aff05c842e240))
+
 ## [2.0.1](https://github.com/PauloDevelo/opencode-completion-gate/compare/v2.0.0...v2.0.1) (2026-11-18)
 
 
