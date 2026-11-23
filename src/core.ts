@@ -23,9 +23,12 @@ export {
   effectiveMaxRetries,
 } from './config.js';
 export {
+  ADO_BUILD_POLICY_TYPE_ID,
   defaultBuildLogArtifact,
   downloadBuildLogs,
+  evaluateBranchBuilds,
   extractTerminalBuildFailures,
+  isBuildPolicy,
   isHumanReviewPolicy,
   pickActivePr,
   pickActivePrDetails,
@@ -39,6 +42,8 @@ export type {
   AdoPrAssertion,
   AdoPrPollOptions,
   AssertionOutcome,
+  BranchBuildMinimal,
+  BranchBuildsRunner,
   BuildLogArtifact,
   BuildLogArtifactRunner,
   BuildLogDownloadOptions,
@@ -54,5 +59,10 @@ export type {
   ShellInvocation,
   TerminalBuildFailure,
 } from './types.js';
-export type { PickPrDetailsResult, PickPrResult } from './ado-pr.js';
+export type {
+  BranchBuildsEvaluation,
+  PickPrDetailsResult,
+  PickPrResult,
+  RequiredPoliciesResult,
+} from './ado-pr.js';
 export type { GateMode } from './config.js';

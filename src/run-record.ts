@@ -72,11 +72,17 @@ function firstLine(text: string): string {
 }
 
 export function buildRunRecord(input: RunRecordInput): RunRecord {
-  const assertions: RunRecordAssertion[] = input.results.map((result) =>
-    result.passed
-      ? { name: result.name, passed: true }
-      : { name: result.name, passed: false, evidence: firstLine(result.evidence) }
-  );
+  const assertions: RunRecordAssertion[] = input.results.map((result) => {
+    const evidence = firstLine(result.evidence);
+    // A pass is evidence too: it says which policies/commands were actually
+    // observed green. Empty evidence stays omitted so the shape is unchanged for
+    // assertions that have nothing to report.
+    if (result.passed)
+      return evidence
+        ? { name: result.name, passed: true, evidence }
+        : { name: result.name, passed: true };
+    return { name: result.name, passed: false, evidence };
+  });
 
   const byName = new Map(assertions.map((a) => [a.name, a]));
   const everyExpectedPassed =

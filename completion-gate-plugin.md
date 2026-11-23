@@ -158,6 +158,30 @@ Uses the `az` CLI to verify the current branch has exactly one active Azure DevO
 
 Flow: resolve current branch (`git branch --show-current`) → `az repos pr list --source-branch <branch> --status active` → fail if zero (unless `skipIfNoPr`) or multiple PRs → `az repos pr policy list --id <prId>` → poll while any required automated policy is queued/running. A rejected or broken automated policy fails only after the policy set has settled (nothing queued/running), so the evidence describes the current evaluation instead of a leftover from the previous run; the timeout is only used while a policy is still in progress.
 
+Every pass is self-evident. A green result names the required policies that were actually evaluated, with their statuses, and writes the same line to `gate-diag.log`:
+
+```text
+ado-pr: 3 required policy(ies) green: Build (PR on Aquadavanced Energy - Back end)=succeeded; Require a merge strategy=approved; Work item linking=approved
+```
+
+Before v2.2.1 a pass returned no evidence at all, which made a wrong green unexplainable after the fact (incident of 2026-11-23: the assertion passed while a required build policy was already terminally rejected).
+
+#### Build evidence is mandatory
+
+A PR is never called green on policy statuses alone when the required set carries no build policy. Build policies are recognised by the ADO build policy **type id** and by display-name variants (`Build`, `Build validation`, …), not by an exact `Build` string match — a localised or renamed type used to fall through every build check silently.
+
+When the required set (after human-policy filtering) contains no build policy, the gate runs `az pipelines builds list --project <project> --branch <branch> --top 20`, keeps the **latest** build of each definition, and accepts the pass only if none of those latest builds failed, was canceled, or is missing:
+
+| Cross-check result | Outcome |
+|---|---|
+| every latest build `completed` with `succeeded` | pass, with the build list in the evidence |
+| any latest build `failed` / `partiallySucceeded` / `canceled`, or in an unrecognised state | fail, naming the definition and build id |
+| any latest build still `inProgress` / `notStarted` / `cancelling` | poll until `pollTimeoutMinutes` |
+| no build on the branch, or `az pipelines builds list` fails (e.g. no Build read scope) | fail — the green cannot be substantiated |
+
+This is deliberately fail-closed: a silent pass with no build evidence is exactly the failure mode the second opinion exists to catch.
+
+
 #### Ignoring human-review policies (`ignoreHumanPolicies`)
 
 Some blocking policies can only be turned green by a **human** (approving, resolving comments) — an agent stuck in the auto-fix loop can never satisfy them. Set `"ignoreHumanPolicies": true` to make the gate wait only on automated policies:
@@ -172,7 +196,7 @@ Some blocking policies can only be turned green by a **human** (approving, resol
   "pollIntervalSeconds": 60, "skipIfNoPr": false, "ignoreHumanPolicies": true }
 ```
 
-With the flag on, a green result reports what was skipped, e.g. `4 required policy(ies) green, 2 human policy(ies) ignored (...)`. If *only* human policies remain on the PR, it counts as green. The flag is opt-in — without it every blocking policy must be green before the gate passes.
+With the flag on, a green result reports what was skipped and in what state, e.g. `3 required policy(ies) green: Build (PR on ...)=succeeded; Require a merge strategy=approved, 2 human policy(ies) ignored (Comment requirements=rejected, Minimum number of reviewers=queued)`. If *only* human policies remain on the PR, it counts as green and the outcome says so explicitly: `only human-review policies on this PR (Comment requirements=rejected, Minimum number of reviewers=queued) — ignored via ignoreHumanPolicies`. No build cross-check runs in that case — the config explicitly chose automated-only, and there is no automated policy left to substantiate. The flag is opt-in — without it every blocking policy must be green before the gate passes.
 
 Policy polling distinguishes pending from terminal states. `queued` and `running` are retried; `approved`, `succeeded`, and `notApplicable` pass. **While any required blocking policy is still in progress, the whole policy set counts as unsettled**: a `rejected`, `broken`, or unknown automated policy is retried instead of failing, because it can be a stale evaluation left over from the previous run. The typical case is a blocking SonarQube `Status` policy (configured with `invalidateOnSourceUpdate: false`) still showing the previous analysis's rejection while the new `Build` policy runs — SonarQube posts its status from inside the build, so the stale value overlaps the running build. Once nothing is in progress, a remaining `rejected`, `broken`, or unknown automated status fails immediately, so the gate does not hide an API-shape or policy-state change behind a polling timeout and the reported policy detail always comes from the settled evaluation. Human-review policies remain retryable when they are not ignored, because their state can change after manual action.
 
@@ -282,15 +306,16 @@ command "backend-build": running "dotnet build ..." (cwd=..., timeout=900s)
 command "backend-build": exit code 0
 assertion "backend-build" passed
 evaluating assertion "azure-devops-pr-green" (ado-pr)
-ado-pr "azure-devops-pr-green": branch="users/pto/3.13.6-...", polling every 60s up to 30 min
-ado-pr "azure-devops-pr-green": round 1 — active PR !61032, checking policies
-ado-pr "azure-devops-pr-green": PR !61032 not green yet — Build: running (2 human policy(ies) ignored)
+assertion "azure-devops-pr-green" FAILED — PR !61032 has terminal policy failure — PR policies not green — Build: rejected (stopping here, remaining assertions skipped)
 gate FAILED on <id>: "azure-devops-pr-green" — retry 1/3, injecting fix request
 ...
+evaluating assertion "azure-devops-pr-green" (ado-pr)
+ado-pr: 4 required policy(ies) green: Build (PR on Aquadavanced Energy - Back end)=succeeded; Require a merge strategy=approved; Comment requirements=approved; Minimum number of reviewers=approved
+assertion "azure-devops-pr-green" passed
 gate PASSED on <id>: all 6 assertion(s) green
 ```
 
-For a completed failed build, the diagnostic instead records `PR !<id> has terminal policy failure — ... Build: rejected ...; stopping polling`, and the same detail is returned to the agent as assertion evidence. A `rejected`/`broken` policy is only reported that way once nothing on the PR is still `queued`/`running`: while anything is in progress the round stays on the polling detail above and no build logs are downloaded yet.
+The `ado-pr: …` line is the pass record: it names every required policy that was evaluated and its status, so a green run can always be explained afterwards. For a completed failed build, the failure evidence carries `PR !<id> has terminal policy failure — … Build: rejected …` plus the build preview/artifacts, and the same detail is returned to the agent. A `rejected`/`broken` policy is only reported that way once nothing on the PR is still `queued`/`running`: while anything is in progress the assertion keeps polling and no build logs are downloaded yet. With `ignoreHumanPolicies: true`, skipped human policies appear with their statuses in the same line, and a PR whose required set carries no build policy is cross-checked against `az pipelines builds list` before it can pass (see [Build evidence is mandatory](#build-evidence-is-mandatory)).
 
 Also logged: session registrations, successful lazy registration, skipped subagents, rejected metadata, session lookup failures, `/gate` toggles, review session creation and verdicts, timeouts, short-circuit stops (`remaining assertions skipped`), escalations after the retry cap, and mid-run aborts (`gate turn-end ABORTED on <id>`). For resumed sessions, use these entries in `gate-diag.log` to distinguish successful registration from a skipped subagent, rejected metadata, or a lookup failure.
 
@@ -302,6 +327,7 @@ Also logged: session registrations, successful lazy registration, skipped subage
 | Agent cannot read `.opencode/completion-gate.json` | If the project's `.opencode/` is a symlink/junction (e.g. worktree setups), opencode resolves it before permission checks — the read is evaluated against `permission.external_directory` using the canonical path, so the project's `opencode.json` must allow that canonical path. |
 | Toggle does nothing / odd behavior | For a resumed session, run `/gate status` first to trigger or confirm lazy registration, then inspect `~/.config/opencode/gate-diag.log` (see [Diagnostics log](#diagnostics-log)) for successful registration, a skipped subagent, rejected metadata, or a lookup failure. |
 | Gate keeps re-running while waiting for reviewers/comments on a PR | Those are human-review policies; set `"ignoreHumanPolicies": true` on the `ado-pr` assertion (see [ado-pr](#ado-pr)) or resolve them manually. |
+| `ado-pr` fails with `no build policy was evaluated` | The PR's required policy set carries no build policy (or its type is not recognised as one). Because policy statuses alone are not build evidence, the gate cross-checks `az pipelines builds list` for the branch and fails when the latest build per definition failed or was canceled, when no build exists for the branch, or when the build list cannot be read (Build read scope). Add a *Build* policy to the PR, re-run the build, or grant the CLI Build read access. |
 | `ado-pr` fails with `Status: rejected` while the CI build is still running | Older plugin builds judged terminality per policy, so a stale `Status` evaluation from the previous run (typically SonarQube with `invalidateOnSourceUpdate: false`) failed the gate mid-build. Current builds keep polling while any required policy is `queued`/`running` and only judge terminality once the set has settled — upgrade `opencode-completion-gate`. |
 | `/gate off` didn't stop the current run instantly | An already-started command/poll round finishes first; the abort lands at the next checkpoint and logs `gate turn-end ABORTED`. |
 | `ado-pr` always fails | `az` must be installed and logged in (`az login`), and the org/project is derived from the git remote. Zero/multiple active PRs on the branch also fail (see `skipIfNoPr`). |

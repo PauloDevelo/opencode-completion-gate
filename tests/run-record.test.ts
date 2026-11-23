@@ -58,6 +58,24 @@ describe('buildRunRecord', () => {
     expect(record.assertions[0].evidence).toBe('exit code 1');
     expect(record.assertions[0].evidence.length).toBeLessThanOrEqual(200);
   });
+
+  it('records passing-assertion evidence so a pass says what it saw', () => {
+    const passingWithEvidence = {
+      name: 'ado-pr',
+      passed: true,
+      evidence: '1 required policy(ies) green: Build=succeeded',
+    };
+    const record = buildRunRecord(
+      input({ expectedAssertions: ['ado-pr'], results: [passingWithEvidence] })
+    );
+
+    expect(record.outcome).toBe('passed');
+    expect(record.assertions[0]).toEqual({
+      name: 'ado-pr',
+      passed: true,
+      evidence: '1 required policy(ies) green: Build=succeeded',
+    });
+  });
 });
 
 describe('writeRunRecord', () => {

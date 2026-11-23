@@ -99,10 +99,27 @@ export interface AdoPrPollOptions {
   now?: () => number;
   isAborted?: () => boolean;
   buildLogArtifact?: BuildLogArtifactRunner;
+  /**
+   * Best-effort branch build cross-check used when the PR's required policy set
+   * carries no build policy. Returns the raw `az pipelines builds list` JSON.
+   * Injected by tests; defaults to the `az` call in `ado-pr.ts`.
+   */
+  listBranchBuilds?: BranchBuildsRunner;
 }
 
+export type BranchBuildsRunner = (
+  projectName: string,
+  branch: string,
+  cwd: string
+) => Promise<string>;
+
 export interface PolicyEvaluationMinimal {
-  configuration?: { isBlocking?: boolean; isRequired?: boolean; type?: { displayName?: string } };
+  configuration?: {
+    isBlocking?: boolean;
+    isRequired?: boolean;
+    type?: { displayName?: string; id?: string };
+    settings?: { displayName?: string; buildDefinitionId?: number };
+  };
   status?: string;
   context?: {
     buildId?: number | string | null;
@@ -113,6 +130,14 @@ export interface PolicyEvaluationMinimal {
       errors?: Array<{ message?: string | null }>;
     } | null;
   } | null;
+}
+
+/** Raw shape of one entry in `az pipelines builds list --output json`. */
+export interface BranchBuildMinimal {
+  id?: number;
+  status?: string;
+  result?: string;
+  definition?: { id?: number; name?: string };
 }
 
 export interface TerminalBuildFailure {

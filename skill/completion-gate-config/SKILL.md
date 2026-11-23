@@ -104,7 +104,12 @@ Requirements:
 | Human (skipped) | *Minimum number of reviewers*, *Required reviewers*, *Comment requirements* |
 | Automated (enforced) | *Build*, *Require a merge strategy*, *Work item linking*, *Status*, anything else |
 
-If only human policies remain, the assertion counts as green.
+If only human policies remain, the assertion counts as green, and the outcome names the ignored policies with their statuses (`only human-review policies on this PR (Comment requirements=rejected, …) — ignored via ignoreHumanPolicies`). No build cross-check runs in that case: the config explicitly chose automated-only.
+
+Two rules keep a green meaningful:
+
+- **A pass says what it saw.** The success evidence and `gate-diag.log` name every required policy evaluated and its status, e.g. `3 required policy(ies) green: Build (PR on …)=succeeded; Require a merge strategy=approved`.
+- **Build evidence is mandatory.** Build policies are recognised by their ADO type id and by display-name variants (`Build`, `Build validation`, …), not an exact `Build` match. If the required set after human filtering carries no build policy, the gate cross-checks `az pipelines builds list --project <p> --branch <b>` (latest build per definition): a failed/canceled latest build, no build at all, or an unreadable build list (no Build read scope) fails the assertion. A running build keeps polling. Do not expect a green on policy statuses alone.
 
 Automated `queued` and `running` statuses are polled, and while anything is still in progress **every** automated `rejected`, `broken`, or unknown status is polled too instead of failing: it can be a stale evaluation from the previous run (classic case: a blocking SonarQube `Status` policy with `invalidateOnSourceUpdate: false` still showing the previous analysis's rejection while the new `Build` runs). Once nothing is in progress, remaining automated `rejected`, `broken`, and unknown statuses fail immediately rather than waiting for `pollTimeoutMinutes`. Human-review policies remain retryable when `ignoreHumanPolicies` is `false`, because a human action can change their state.
 
