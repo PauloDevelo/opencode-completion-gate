@@ -1,6 +1,6 @@
 {
   "name": "opencode-completion-gate",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "OpenCode plugin: per-session quality gate that blocks declaring done until configured assertions pass",
   "type": "module",
   "main": "dist/plugin.js",

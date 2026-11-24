@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/PauloDevelo/opencode-completion-gate/compare/v2.2.0...v2.2.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **ado-pr:** never pass without build evidence or a policy record ([#20](https://github.com/PauloDevelo/opencode-completion-gate/issues/20)) ([53a777a](https://github.com/PauloDevelo/opencode-completion-gate/commit/53a777a83032b0c72fe7ae2e378dc8c221ade8de))
+
 ## [2.2.0](https://github.com/PauloDevelo/opencode-completion-gate/compare/v2.1.0...v2.2.0) (2026-11-19)
 
 
