@@ -60,6 +60,8 @@ Config lives per project at `<project-root>/.opencode/completion-gate.json` (re-
 
 Assertion types: `command`, `ado-pr`, `opencode-review`. See [completion-gate-plugin.md](completion-gate-plugin.md) for the full schema, ADO PR polling, review sessions, diagnostics (`gate-diag.log`), and troubleshooting.
 
+`ado-pr` reports the policies it evaluated on every pass, and will not report green when no build policy is in the PR's required set unless a branch build cross-check (`az pipelines builds list`) is green too — a policy-status-only green cannot hide a red required build.
+
 Orchestration launchers can arm the first session without a chat message by
 setting `OPENCODE_GATE_BOOTSTRAP_COMMAND_B64` (or
 `OPENCODE_GATE_BOOTSTRAP_COMMAND`) and optionally

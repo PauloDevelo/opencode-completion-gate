@@ -7,8 +7,8 @@ export type GateMode = 'combined' | 'command-only';
 
 export class GateAborted extends Error {}
 
-export function pass(name: string): AssertionOutcome {
-  return { name, passed: true, evidence: '' };
+export function pass(name: string, evidence = ''): AssertionOutcome {
+  return { name, passed: true, evidence: evidence.trim() };
 }
 
 export function fail(name: string, evidence: string): AssertionOutcome {

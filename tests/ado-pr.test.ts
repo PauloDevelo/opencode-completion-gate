@@ -415,11 +415,10 @@ describe('runAdoPrAssertion', () => {
 
   it('passes when PR exists and policies are green', async () => {
     const shell = fakeShell({ 'repos pr list': PR_ONE, 'repos pr policy': POL_GREEN });
-    expect(await runAdoPrAssertion(a, 'C:/proj', shell)).toEqual({
-      name: 'pr-gate',
-      passed: true,
-      evidence: '',
-    });
+    const r = await runAdoPrAssertion(a, 'C:/proj', shell);
+    expect(r).toMatchObject({ name: 'pr-gate', passed: true });
+    expect(r.evidence).toContain('1 required policy(ies) green');
+    expect(r.evidence).toContain('Build=succeeded');
   });
 
   it('fails immediately when no PR and skipIfNoPr=false', async () => {
@@ -603,7 +602,10 @@ describe('runAdoPrAssertion', () => {
         throw new Error('artifact runner must not run while policies are still settling');
       },
     });
-    expect(r).toEqual({ name: 'pr-gate', passed: true, evidence: '' });
+    expect(r).toMatchObject({ name: 'pr-gate', passed: true });
+    expect(r.evidence).toContain('2 required policy(ies) green');
+    expect(r.evidence).toContain('Status=approved');
+    expect(r.evidence).toContain('Build=succeeded');
     expect(policyCalls).toBe(2);
     expect(downloads).toBe(0);
   });
@@ -758,5 +760,302 @@ describe('real az output shapes (live-captured fixtures)', () => {
     const r = requiredPoliciesGreen(fixture('pr-policy-real-green-derived.json'));
     expect(r.green).toBe(true);
     expect(r.detail).toContain('6 required policy(ies) green');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: a required build policy must never be silently skipped
+// (incident ses_df62aaf7affeWd8Nq01SxfPQuw, PR 64695 — the assertion passed
+// while the required "AquadvancedEnergy Frontend Audit" build was red).
+// ---------------------------------------------------------------------------
+
+const BASE_ADO_ASSERTION = {
+  type: 'ado-pr' as const,
+  name: 'pr-gate',
+  pollTimeoutMinutes: 1,
+  pollIntervalSeconds: 5,
+  skipIfNoPr: false,
+};
+
+const POL_BUILD_VALIDATION_RED = JSON.stringify([
+  {
+    configuration: { isBlocking: true, type: { displayName: 'Build validation' } },
+    status: 'rejected',
+    context: {
+      buildId: 424885,
+      buildDefinitionName: 'AquadvancedEnergy Frontend Audit',
+      buildOutputPreview: { errors: [{ message: 'npm ERR! audit failed' }] },
+    },
+  },
+]);
+
+const POL_MIXED_GREEN = JSON.stringify([
+  {
+    configuration: {
+      isBlocking: true,
+      type: { displayName: 'Build' },
+      settings: { displayName: 'PR on AquadvancedEnergy - Frontend Audit' },
+    },
+    status: 'succeeded',
+  },
+  {
+    configuration: { isBlocking: true, type: { displayName: 'Require a merge strategy' } },
+    status: 'approved',
+  },
+  {
+    configuration: { isBlocking: false, type: { displayName: 'Required reviewers' } },
+    status: 'queued',
+  },
+]);
+
+const POL_NO_BUILD = JSON.stringify([
+  {
+    configuration: { isBlocking: true, type: { displayName: 'Require a merge strategy' } },
+    status: 'approved',
+  },
+  {
+    configuration: { isBlocking: true, type: { displayName: 'Work item linking' } },
+    status: 'approved',
+  },
+]);
+
+const POL_ONLY_HUMANS = JSON.stringify([
+  {
+    configuration: { isBlocking: true, type: { displayName: 'Comment requirements' } },
+    status: 'rejected',
+  },
+  {
+    configuration: { isBlocking: true, type: { displayName: 'Minimum number of reviewers' } },
+    status: 'queued',
+  },
+]);
+
+const buildList = (
+  entries: Array<{ id: number; name: string; status: string; result?: string }>
+): string =>
+  JSON.stringify(
+    entries.map((e) => ({
+      id: e.id,
+      buildNumber: `20261123.${e.id}`,
+      status: e.status,
+      result: e.result ?? null,
+      definition: { id: 1683, name: e.name },
+    }))
+  );
+
+const BUILDS_GREEN = buildList([
+  {
+    id: 424886,
+    name: 'AquadvancedEnergy Frontend Audit',
+    status: 'completed',
+    result: 'succeeded',
+  },
+]);
+
+const BUILDS_FAILED = buildList([
+  {
+    id: 424885,
+    name: 'AquadvancedEnergy Frontend Audit',
+    status: 'completed',
+    result: 'failed',
+  },
+]);
+
+const BUILDS_RUNNING = buildList([
+  { id: 424886, name: 'AquadvancedEnergy Frontend Audit', status: 'inProgress' },
+]);
+
+describe('build policy detection is not tied to the exact "Build" display name', () => {
+  it('extracts a terminal failure from a policy displayed as "Build validation"', () => {
+    const failures = extractTerminalBuildFailures(POL_BUILD_VALIDATION_RED);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      buildId: 424885,
+      definitionName: 'AquadvancedEnergy Frontend Audit',
+      status: 'rejected',
+    });
+    expect(failures[0].previewErrors).toEqual([expect.stringContaining('npm ERR! audit failed')]);
+  });
+
+  it('extracts a terminal failure from a build policy identified only by its ADO type id', () => {
+    const json = JSON.stringify([
+      {
+        configuration: {
+          isBlocking: true,
+          type: { id: '0609b952-1397-4640-95ec-e00a01b2c241' },
+        },
+        status: 'rejected',
+        context: { buildId: 424885 },
+      },
+    ]);
+    expect(extractTerminalBuildFailures(json)).toHaveLength(1);
+  });
+
+  it('fails the assertion with build evidence for a rejected "Build validation" policy', async () => {
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_BUILD_VALIDATION_RED),
+      { buildLogArtifact: async () => ({ buildId: 424885, error: 'not downloaded in test' }) }
+    );
+    expect(r.passed).toBe(false);
+    expect(r.evidence).toContain('Build definition: AquadvancedEnergy Frontend Audit');
+    expect(r.evidence).toContain('npm ERR! audit failed');
+  });
+});
+
+describe('a pass is self-evident', () => {
+  it('reports the required policies and their statuses', async () => {
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_MIXED_GREEN)
+    );
+    expect(r.passed).toBe(true);
+    expect(r.evidence).toContain('2 required policy(ies) green');
+    expect(r.evidence).toContain('Build (PR on AquadvancedEnergy - Frontend Audit)=succeeded');
+    expect(r.evidence).toContain('Require a merge strategy=approved');
+  });
+});
+
+describe('no required build policy is a non-silent outcome', () => {
+  it('refuses green and names the missing build policy at the unit level', () => {
+    const r = requiredPoliciesGreen(POL_NO_BUILD);
+    expect(r.green).toBe(false);
+    expect(r.detail).toContain('no build policy');
+  });
+
+  it('fails the assertion when a build on the branch failed', async () => {
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_NO_BUILD),
+      { listBranchBuilds: async () => BUILDS_FAILED }
+    );
+    expect(r.passed).toBe(false);
+    expect(r.evidence).toContain('build cross-check');
+    expect(r.evidence).toContain('AquadvancedEnergy Frontend Audit');
+  });
+
+  it('passes only once the branch build cross-check is green', async () => {
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_NO_BUILD),
+      { listBranchBuilds: async () => BUILDS_GREEN }
+    );
+    expect(r.passed).toBe(true);
+    expect(r.evidence).toContain('build cross-check');
+    expect(r.evidence).toContain('AquadvancedEnergy Frontend Audit');
+  });
+
+  it('fails closed when the build cross-check cannot be performed', async () => {
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_NO_BUILD),
+      {
+        listBranchBuilds: async () => {
+          throw new Error('az pipelines builds list failed (code 1): build read scope missing');
+        },
+      }
+    );
+    expect(r.passed).toBe(false);
+    expect(r.evidence).toContain('build cross-check unavailable');
+    expect(r.evidence).toContain('build read scope missing');
+  });
+
+  it('fails closed when the branch has no build to cross-check', async () => {
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_NO_BUILD),
+      { listBranchBuilds: async () => '[]' }
+    );
+    expect(r.passed).toBe(false);
+    expect(r.evidence).toContain('no builds');
+  });
+
+  it('still fails on a red automated policy when no build policy is present', async () => {
+    const policy = JSON.stringify([
+      {
+        configuration: { isBlocking: true, type: { displayName: 'Require a merge strategy' } },
+        status: 'approved',
+      },
+      { configuration: { isBlocking: true, type: { displayName: 'Status' } }, status: 'rejected' },
+    ]);
+    let crossChecks = 0;
+    const r = await runAdoPrAssertion(BASE_ADO_ASSERTION, 'C:/proj', shellForPrAndPolicy(policy), {
+      listBranchBuilds: async () => {
+        crossChecks += 1;
+        return BUILDS_GREEN;
+      },
+    });
+    expect(r.passed).toBe(false);
+    expect(r.evidence).toContain('Status: rejected');
+    expect(crossChecks).toBe(0);
+  });
+
+  it('fails closed on a completed build with an unrecognised result', async () => {
+    const builds = JSON.stringify([
+      {
+        id: 424886,
+        status: 'completed',
+        result: null,
+        definition: { id: 1683, name: 'AquadvancedEnergy Frontend Audit' },
+      },
+    ]);
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_NO_BUILD),
+      { listBranchBuilds: async () => builds }
+    );
+    expect(r.passed).toBe(false);
+    expect(r.evidence).toContain('unrecognised');
+    expect(r.evidence).toContain('AquadvancedEnergy Frontend Audit');
+  });
+
+  it('polls while the cross-checked build is running, then passes', async () => {
+    const responses = [BUILDS_RUNNING, BUILDS_GREEN];
+    let calls = 0;
+    const sleeps: number[] = [];
+    const r = await runAdoPrAssertion(
+      BASE_ADO_ASSERTION,
+      'C:/proj',
+      shellForPrAndPolicy(POL_NO_BUILD),
+      {
+        listBranchBuilds: async () => responses[Math.min(calls++, responses.length - 1)],
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      }
+    );
+    expect(r.passed).toBe(true);
+    expect(sleeps).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+});
+
+describe('only human-review policies with ignoreHumanPolicies', () => {
+  it('passes with an explicit outcome naming the ignored policies and statuses', async () => {
+    let crossChecks = 0;
+    const r = await runAdoPrAssertion(
+      { ...BASE_ADO_ASSERTION, ignoreHumanPolicies: true },
+      'C:/proj',
+      shellForPrAndPolicy(POL_ONLY_HUMANS),
+      {
+        listBranchBuilds: async () => {
+          crossChecks += 1;
+          return BUILDS_GREEN;
+        },
+      }
+    );
+    expect(r.passed).toBe(true);
+    expect(r.evidence).toContain('only human-review policies');
+    expect(r.evidence).toContain('Comment requirements=rejected');
+    expect(r.evidence).toContain('Minimum number of reviewers=queued');
+    expect(r.evidence).toContain('ignored via ignoreHumanPolicies');
+    expect(crossChecks).toBe(0);
   });
 });
